@@ -513,3 +513,220 @@ func TestBuffer_NewConsumer_success(t *testing.T) {
 		t.Fatal("goroutine diff:", finalGoroutines-initialGoroutines)
 	}
 }
+
+func TestBuffer_Diff_invalid(t *testing.T) {
+	buffer := new(Buffer)
+
+	defer buffer.Close()
+
+	if d, ok := buffer.Diff(nil); ok || d != 0 {
+		t.Fatal("unexpected diff", d, ok)
+	}
+
+	if d, ok := buffer.Diff((*consumer)(nil)); ok || d != 0 {
+		t.Fatal("unexpected diff", d, ok)
+	}
+
+	if d, ok := buffer.Diff(new(consumer)); ok || d != 0 {
+		t.Fatal("unexpected diff", d, ok)
+	}
+
+	if d, ok := buffer.Diff(&consumer{producer: buffer}); ok || d != 0 {
+		t.Fatal("unexpected diff", d, ok)
+	}
+}
+
+func TestBuffer_Diff_range(t *testing.T) {
+	buffer := new(Buffer)
+
+	defer buffer.Close()
+
+	buffer.Put(nil, 1, 2, 3, 4)
+
+	c, err := buffer.NewConsumer()
+
+	defer c.Close()
+
+	if d, ok := buffer.Diff(c); !ok || d != 4 {
+		t.Fatal("unexpected diff", d, ok)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var values []interface{}
+
+	err = Range(
+		nil,
+		c,
+		func(index int, value interface{}) bool {
+			values = append(values, value)
+
+			diff, ok := buffer.Diff(c)
+
+			if !ok {
+				panic("should always be ok")
+			}
+
+			return diff > 0
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(values, []interface{}{1, 2, 3, 4}); diff != nil {
+		t.Fatal("unexpected diff", diff)
+	}
+}
+
+func TestBuffer_Range_simple(t *testing.T) {
+	buffer := new(Buffer)
+
+	defer buffer.Close()
+
+	buffer.Put(nil, 1, 2, 3, 4)
+
+	c, err := buffer.NewConsumer()
+
+	defer c.Close()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var values []interface{}
+
+	err = buffer.Range(
+		nil,
+		c,
+		func(index int, value interface{}) bool {
+			values = append(values, value)
+			return true
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuffer_Range_added(t *testing.T) {
+	buffer := new(Buffer)
+
+	defer buffer.Close()
+
+	buffer.Put(nil, 1, 2, 3, 4)
+
+	c, err := buffer.NewConsumer()
+
+	defer c.Close()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var values []interface{}
+
+	go func() {
+		time.Sleep(time.Millisecond * 50)
+		buffer.Put(nil, 5, 6)
+	}()
+
+	err = buffer.Range(
+		nil,
+		c,
+		func(index int, value interface{}) bool {
+			values = append(values, value)
+			time.Sleep(time.Millisecond * 30)
+			return true
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(values, []interface{}{1, 2, 3, 4, 5, 6}); diff != nil {
+		t.Fatal("unexpected diff", diff)
+	}
+}
+
+func TestBuffer_Range_bailOut(t *testing.T) {
+	buffer := new(Buffer)
+
+	defer buffer.Close()
+
+	buffer.Put(nil, 1, 2, 3, 4)
+
+	c, err := buffer.NewConsumer()
+
+	defer c.Close()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var values []interface{}
+
+	err = buffer.Range(
+		nil,
+		c,
+		func(index int, value interface{}) bool {
+			values = append(values, value)
+			return value != 2
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(values, []interface{}{1, 2}); diff != nil {
+		t.Fatal("unexpected diff", diff)
+	}
+}
+
+func TestBuffer_Range_in(t *testing.T) {
+	buffer := new(Buffer)
+	defer buffer.Close()
+
+	other := new(Buffer)
+	defer other.Close()
+
+	consumers := []Consumer{
+		nil,
+		(*consumer)(nil),
+		new(consumer),
+		&consumer{producer: other},
+	}
+
+	for _, c := range consumers {
+		err := buffer.Range(context.Background(), c, func(index int, value interface{}) bool {
+			return false
+		})
+
+		if err == nil || err.Error() != "bigbuff.Buffer.Range consumer must be one constructed via bigbuff.Buffer.NewConsumer" {
+			t.Fatal("unexpected error", err)
+		}
+	}
+}
+
+func TestBuffer_Range_nilFunc(t *testing.T) {
+	buffer := new(Buffer)
+	defer buffer.Close()
+
+	c, err := buffer.NewConsumer()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = buffer.Range(nil, c, nil)
+
+	if err == nil || err.Error() != "bigbuff.Buffer.Range nil fn" {
+		t.Fatal("unexpected error", err)
+	}
+}

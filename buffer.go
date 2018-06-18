@@ -157,6 +157,66 @@ func (b *Buffer) SetCleanerConfig(config CleanerConfig) error {
 	return nil
 }
 
+// Diff is provided to facilitate ranging over a buffer via a consumer, and returns the items remaining
+// in the buffer (includes uncommitted), be aware that the value CAN be negative, in the event the consumer fell
+// behind (the cleaner cleared item(s) from the buffer that the consumer hadn't read yet, which by default will never
+// happen, as the default mode is a unbounded buffer).
+// Note it will return (0, false) for any invalid consumers or any not registered on the receiver buffer.
+func (b *Buffer) Diff(c Consumer) (int, bool) {
+	b.ensure()
+
+	// we need to get the actual consumer type (it's used as a map key)
+	cm, ok := c.(*consumer)
+
+	if !ok || cm == nil || cm.producer != b {
+		return 0, false
+	}
+
+	// the consumer is always locked first
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	// then the buffer itself (we only need a read lock)
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	// now we can check to see if it was actually from this buffer
+	offset, ok := b.consumers[cm]
+
+	if !ok {
+		return 0, false
+	}
+
+	// atomically checks the size of the buffer - the relative offset of the consumer
+	return len(b.buffer) - (offset + cm.offset - b.offset), true
+}
+
+// Range provides a way to iterate from the start to the end of the buffer, note that it will exit as soon as it
+// reaches the end of the buffer (unlike ranging on a channel), it simply utilizes the package Range + Buffer.Diff.
+func (b *Buffer) Range(ctx context.Context, c Consumer, fn func(index int, value interface{}) bool) error {
+	b.ensure()
+
+	if cm, ok := c.(*consumer); !ok || cm == nil || cm.producer != b {
+		return errors.New("bigbuff.Buffer.Range consumer must be one constructed via bigbuff.Buffer.NewConsumer")
+	}
+
+	if fn == nil {
+		return errors.New("bigbuff.Buffer.Range nil fn")
+	}
+
+	return Range(
+		ctx,
+		c,
+		func(index int, value interface{}) bool {
+			if !fn(index, value) {
+				return false
+			}
+			diff, ok := b.Diff(c)
+			return ok && diff > 0
+		},
+	)
+}
+
 // UNEXPORTED
 
 // delete runs delete on the consumer map, for a given consumer, using the mutex and broadcasting
