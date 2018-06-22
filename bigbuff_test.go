@@ -517,3 +517,48 @@ func TestFixedBufferCleaner_nil(t *testing.T) {
 		t.Fatal("unexpected error", err.Error())
 	}
 }
+
+func TestBuffer_Range_empty(t *testing.T) {
+	buffer := new(Buffer)
+	defer buffer.Close()
+	c, err := buffer.NewConsumer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	err = buffer.Range(nil, c, func(index int, value interface{}) bool {
+		t.Error("should not have been reached")
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuffer_Range_one(t *testing.T) {
+	buffer := new(Buffer)
+	defer buffer.Close()
+	c, err := buffer.NewConsumer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	err = buffer.Put(nil, -121)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	err = buffer.Range(nil, c, func(index int, value interface{}) bool {
+		if index != 0 || value != -121 {
+			t.Error("unexpected range", index, value)
+		}
+		calls++
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("unexpected number of calls", calls)
+	}
+}

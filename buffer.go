@@ -204,6 +204,10 @@ func (b *Buffer) Range(ctx context.Context, c Consumer, fn func(index int, value
 		return errors.New("bigbuff.Buffer.Range nil fn")
 	}
 
+	if diff, ok := b.Diff(c); !ok || diff <= 0 {
+		return nil
+	}
+
 	return Range(
 		ctx,
 		c,
