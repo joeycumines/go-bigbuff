@@ -1,9 +1,9 @@
 package bigbuff
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"context"
 )
 
 // Close will close an open consumer, potentially blocking until the internal offset has been reset (changes have

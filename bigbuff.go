@@ -2,13 +2,13 @@
 package bigbuff
 
 import (
-	"sync"
-	"io"
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"io"
 	"reflect"
+	"sync"
+	"time"
 )
 
 const (
@@ -137,6 +137,28 @@ type (
 			Error error
 		}, interface{}, error)
 		commit(c *consumer, offset int) error
+	}
+
+	// Exclusive provides synchronous de-bouncing of operations that may also return a result or error, with
+	// consistent or controlled input via provided closures also supported, and the use of any comparable keys to
+	// match on, it provides a guarantee that the actual call that returns a given value will be started AFTER the
+	// Call method, so keep that in mind when implementing something using it. You may also use the CallAfter
+	// method to delay execution after initialising the key, e.g. to allow the first of many costly operations on
+	// a given key a grace period to be grouped with the remaining keys.
+	Exclusive struct {
+		mutex sync.Mutex
+		work  map[interface{}]*exclusiveItem
+	}
+
+	exclusiveItem struct {
+		mutex    *sync.Mutex
+		cond     *sync.Cond
+		work     func() (interface{}, error)
+		running  bool
+		complete bool
+		count    int
+		output   interface{}
+		err      error
 	}
 )
 

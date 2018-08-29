@@ -1,13 +1,13 @@
 package bigbuff
 
 import (
-	"testing"
-	"sync"
-	"time"
-	"runtime"
+	"context"
 	"github.com/go-test/deep"
 	"reflect"
-	"context"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestBuffer_Close(t *testing.T) {

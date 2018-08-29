@@ -1,12 +1,12 @@
 package bigbuff
 
 import (
-	"testing"
-	"time"
 	"context"
 	"github.com/go-test/deep"
-	"sync"
 	"sort"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestNewChannel_ctxDefaults(t *testing.T) {

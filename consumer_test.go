@@ -1,15 +1,15 @@
 package bigbuff
 
 import (
-	"testing"
 	"context"
-	"time"
-	"sync"
 	"errors"
+	"sync"
+	"testing"
+	"time"
 )
 
 type mockProducer struct {
-	_delete func(c *consumer)
+	_delete   func(c *consumer)
 	_getAsync func(ctx context.Context, c *consumer, offset int, cancels ... context.Context) (<-chan struct {
 		Value interface{}
 		Error error

@@ -1,10 +1,10 @@
 package bigbuff
 
 import (
-	"sync"
+	"context"
 	"errors"
 	"fmt"
-	"context"
+	"sync"
 )
 
 // WaitCond performs a conditional wait against a *sync.Cond, waiting until fn returns true, with a inbuilt escape

@@ -25,3 +25,5 @@ Features:
    tries a send, and another consumer would break guaranteed in-order processing)
  - Single-channel implementation of the `bigbuff.Consumer` interface, that is uses reflection + polling to provide
    the same commit and rollback functionality (retains order, supports any readable channel).
+ - Breaking from the mould a little `bigbuff.Exclusive` allows key based locking and de-bouncing for operations 
+   that may return values like `(interface{}, error)`, operating synchronously to keep things simple

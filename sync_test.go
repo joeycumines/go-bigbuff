@@ -1,11 +1,11 @@
 package bigbuff
 
 import (
-	"testing"
 	"context"
-	"sync"
-	"time"
 	"runtime"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestWaitCond_canceled(t *testing.T) {

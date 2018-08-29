@@ -1,10 +1,10 @@
 package bigbuff
 
 import (
-	"testing"
-	"time"
 	"github.com/go-test/deep"
 	"runtime"
+	"testing"
+	"time"
 )
 
 func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
