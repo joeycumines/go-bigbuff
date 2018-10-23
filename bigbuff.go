@@ -150,6 +150,12 @@ type (
 		work  map[interface{}]*exclusiveItem
 	}
 
+	// ExclusiveOutcome is the return value from an async bigbuff.Exclusive call
+	ExclusiveOutcome struct {
+		Result interface{}
+		Error  error
+	}
+
 	exclusiveItem struct {
 		mutex    *sync.Mutex
 		cond     *sync.Cond
@@ -157,7 +163,7 @@ type (
 		running  bool
 		complete bool
 		count    int
-		output   interface{}
+		result   interface{}
 		err      error
 	}
 )

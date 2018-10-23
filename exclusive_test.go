@@ -2,6 +2,7 @@ package bigbuff
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -530,6 +531,15 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 }
 
 func TestExclusive_Call_valuePanic(t *testing.T) {
+	startGoroutines := runtime.NumGoroutine()
+	defer func() {
+		time.Sleep(time.Millisecond * 200)
+		endGoroutines := runtime.NumGoroutine()
+		if startGoroutines < endGoroutines {
+			t.Error(startGoroutines, endGoroutines)
+		}
+	}()
+
 	var (
 		e Exclusive
 		d = make(chan struct{})
@@ -539,14 +549,11 @@ func TestExclusive_Call_valuePanic(t *testing.T) {
 	)
 
 	go func() {
-		defer func() {
-			if r := recover(); r != "some_panic" {
-				t.Error(r)
-			}
-			close(d)
-		}()
-		e.CallAfter("1", f, time.Millisecond*400)
-		t.Error("bad")
+		v, err := e.CallAfter("1", f, time.Millisecond*400)
+		if v != nil || err == nil || err.Error() != "bigbuff.Exclusive.CallAfterAsync recovered from panic (string): some_panic" {
+			t.Error(v, err)
+		}
+		close(d)
 	}()
 
 	time.Sleep(time.Millisecond * 200)
@@ -557,4 +564,49 @@ func TestExclusive_Call_valuePanic(t *testing.T) {
 	}
 
 	<-d
+}
+
+func TestCallAsync(t *testing.T) {
+	for x := 0; x < 10; x++ {
+		var (
+			exclusive   Exclusive
+			outcomeChan <-chan *ExclusiveOutcome
+			mutex       sync.Mutex
+			locked      = true
+			calls       int
+		)
+		exclusive.CallAsync(1, func() (interface{}, error) {
+			time.Sleep(time.Millisecond * 200)
+			mutex.Lock()
+			locked = false
+			mutex.Unlock()
+			return nil, nil
+		})
+		for y := 0; y < 1000; y++ {
+			func(y int) {
+				outcomeChan = exclusive.CallAsync(1, func() (interface{}, error) {
+					mutex.Lock()
+					if locked {
+						t.Error(locked)
+					}
+					calls++
+					mutex.Unlock()
+					time.Sleep(time.Millisecond * 250)
+					return y, nil
+				})
+			}(y)
+		}
+		outcome := <-outcomeChan
+		if outcome.Result != 1000-1 || outcome.Error != nil {
+			t.Error(outcome)
+		}
+		if v := <-outcomeChan; v != nil {
+			t.Fatal(v)
+		}
+		mutex.Lock()
+		if calls != 1 {
+			t.Error(calls)
+		}
+		mutex.Unlock()
+	}
 }
