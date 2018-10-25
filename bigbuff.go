@@ -166,6 +166,21 @@ type (
 		result   interface{}
 		err      error
 	}
+
+	// Workers represents a dynamically resizable pool of workers, for when you want to have up to x number of
+	// operations happening at any given point in time, it can work directly with the Exclusive implementation.
+	Workers struct {
+		mutex  sync.Mutex
+		count  int
+		target int
+		queue  []*struct {
+			value  func() (interface{}, error)
+			output chan<- struct {
+				result interface{}
+				error  error
+			}
+		}
+	}
 )
 
 // DefaultCleaner is the Buffer's default cleaner, if there is at least one "active" consumer it returns the lowest
