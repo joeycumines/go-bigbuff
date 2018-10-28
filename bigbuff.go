@@ -171,6 +171,7 @@ type (
 	// operations happening at any given point in time, it can work directly with the Exclusive implementation.
 	Workers struct {
 		mutex  sync.Mutex
+		cond   *sync.Cond
 		count  int
 		target int
 		queue  []*struct {

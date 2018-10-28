@@ -20,13 +20,21 @@ func TestWorkers_Call(t *testing.T) {
 	}()
 
 	var (
-		w = new(Workers)
-		m sync.Mutex
-		c int
-		d bool
-		v = 12314
-		e = errors.New("some_error")
+		w    = new(Workers)
+		m    sync.Mutex
+		c    int
+		d    bool
+		v    = 12314
+		e    = errors.New("some_error")
+		done = make(chan struct{})
 	)
+
+	w.Wait()
+	w.mutex.Lock()
+	if w.cond != nil || w.count != 0 || w.target != 0 || w.queue != nil {
+		t.Error(w)
+	}
+	w.mutex.Unlock()
 
 	for x := 0; x < 10000; x++ {
 		go func() {
@@ -55,9 +63,17 @@ func TestWorkers_Call(t *testing.T) {
 
 	time.Sleep(time.Millisecond * 100)
 
+	go func() {
+		w.Wait()
+		close(done)
+	}()
+
 	m.Lock()
 	if diff := math.Abs(float64(c) - 20); diff > 2 {
 		t.Error(c)
+	}
+	if count := w.Count(); count != c {
+		t.Error(count, c)
 	}
 	m.Unlock()
 
@@ -86,9 +102,18 @@ func TestWorkers_Call(t *testing.T) {
 
 	time.Sleep(time.Millisecond * 400)
 
+	select {
+	case <-done:
+		t.Error("expected not done")
+	default:
+	}
+
 	m.Lock()
 	if diff := math.Abs(float64(c) - 12); diff > 2 {
 		t.Error(c)
+	}
+	if count := w.Count(); count != c {
+		t.Error(count, c)
 	}
 	m.Unlock()
 
@@ -117,9 +142,18 @@ func TestWorkers_Call(t *testing.T) {
 
 	time.Sleep(time.Millisecond * 100)
 
+	select {
+	case <-done:
+		t.Error("expected not done")
+	default:
+	}
+
 	m.Lock()
 	if diff := math.Abs(float64(c) - 100); diff > 10 {
 		t.Error(c)
+	}
+	if count := w.Count(); count != c {
+		t.Error(count, c)
 	}
 	m.Unlock()
 
@@ -134,6 +168,16 @@ func TestWorkers_Call(t *testing.T) {
 		t.Error(c)
 	}
 	m.Unlock()
+
+	select {
+	case <-done:
+	default:
+		t.Error("expected done")
+	}
+
+	if count := w.Count(); count != 0 {
+		t.Error(count)
+	}
 
 	w.mutex.Lock()
 	if len(w.queue) != 0 || w.target != 100 || w.count != 0 {
