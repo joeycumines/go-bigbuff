@@ -46,14 +46,19 @@ func (c *consumer) Done() <-chan struct{} {
 }
 
 func (c *consumer) Get(ctx context.Context) (interface{}, error) {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("bigbuff.consumer.Get input context error: %s", err.Error())
-		}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("bigbuff.consumer.Get input context error: %s", err.Error())
 	}
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	if err := c.ctx.Err(); err != nil {
 		return nil, fmt.Errorf("bigbuff.consumer.Get internal context error: %s", err.Error())

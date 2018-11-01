@@ -3,6 +3,7 @@ package bigbuff
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -501,5 +502,59 @@ func TestConsumer_Commit_error(t *testing.T) {
 
 	if pO != 159 {
 		t.Error("unexpected commit offset", pO)
+	}
+}
+
+// TestConsumer_Get_leaky is a regression test for a bug where async wait conditions would block forever
+func TestConsumer_Get_leaky(t *testing.T) {
+	startGoroutines := runtime.NumGoroutine()
+	defer func() {
+		time.Sleep(time.Millisecond * 200)
+		endGoroutines := runtime.NumGoroutine()
+		if endGoroutines > startGoroutines {
+			t.Error(startGoroutines, endGoroutines)
+		}
+	}()
+	var buffer Buffer
+	defer buffer.Close()
+	consumer, err := buffer.NewConsumer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		var x int
+		for {
+			x++
+			select {
+			case <-ticker.C:
+				if err := buffer.Put(ctx, x); err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	for x := 1; x <= 1000; x++ {
+		v, err := consumer.Get(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		y := v.(int)
+		if x != y {
+			t.Fatal(x, y)
+		}
+		if err := consumer.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endGoroutines := runtime.NumGoroutine()
+	if endGoroutines > startGoroutines+20 {
+		t.Error(startGoroutines, endGoroutines)
 	}
 }

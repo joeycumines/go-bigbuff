@@ -5,7 +5,8 @@ import (
 )
 
 // CombineContext returns a context based on the ctx (first param), that will cancel when ANY of the other provided
-// context values cancel.
+// context values cancel CAUTION this spawns one or more blocking goroutines, if you call this with contexts
+// that don't cancel in the reasonable lifetime of your application you will have a leak
 func CombineContext(ctx context.Context, others ... context.Context) (context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
