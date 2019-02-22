@@ -32,7 +32,7 @@ type (
 
 		// Put will send the provided values in-order to the message buffer, or return an error.
 		// It MUST NOT block in such a way that it will be possible to cause a deadlock locally.
-		Put(ctx context.Context, values ... interface{}) error
+		Put(ctx context.Context, values ...interface{}) error
 	}
 
 	// Consumer models a consumer in a producer-consumer pattern, where the resource will be closed at most once.
@@ -132,7 +132,7 @@ type (
 	// producer models the relevant unexported functions of the buffer used by the consumer, for testing
 	producer interface {
 		delete(c *consumer)
-		getAsync(ctx context.Context, c *consumer, offset int, cancels ... context.Context) (<-chan struct {
+		getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
 			Value interface{}
 			Error error
 		}, interface{}, error)
@@ -181,6 +181,10 @@ type (
 				error  error
 			}
 		}
+	}
+
+	fatalError struct {
+		err error
 	}
 )
 
@@ -257,7 +261,7 @@ func Range(ctx context.Context, consumer Consumer, fn func(index int, value inte
 
 	var (
 		fatalErr error = nil
-		running  bool  = true
+		running        = true
 		// rollback handles any rollback + any error including any required append logic to get a full fatal error
 		rollback = func() {
 			err := consumer.Rollback()
@@ -314,4 +318,34 @@ func Range(ctx context.Context, consumer Consumer, fn func(index int, value inte
 
 	// may be nil, or may contain any and all fatal errors that occurred in this function
 	return fatalErr
+}
+
+// FatalError wraps a given error to indicate to functions or methods that receive a closure that they should
+// no longer continue to operate (applies to: ExponentialRetry), note that the error type will be transparently
+// and recursively unpacked, for any return values, from said methods or functions, so DO NOT attempt to chain
+// such calls without explicit handling at the top level for each fatal-able operation
+// NOTE calls to this function with a nil err will trigger a panic
+func FatalError(err error) error {
+	if err == nil {
+		panic(errors.New("bigbuff.FatalError nil err"))
+	}
+	return fatalError{err: err}
+}
+
+func (f fatalError) Error() string {
+	return f.err.Error()
+}
+
+func unpackFatalError(err error) error {
+	switch err := err.(type) {
+	case fatalError:
+		return unpackFatalError(err.err)
+	default:
+		return err
+	}
+}
+
+func isFatalError(err error) bool {
+	_, ok := err.(fatalError)
+	return ok
 }

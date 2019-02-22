@@ -7,7 +7,7 @@ import (
 // CombineContext returns a context based on the ctx (first param), that will cancel when ANY of the other provided
 // context values cancel CAUTION this spawns one or more blocking goroutines, if you call this with contexts
 // that don't cancel in the reasonable lifetime of your application you will have a leak
-func CombineContext(ctx context.Context, others ... context.Context) (context.Context) {
+func CombineContext(ctx context.Context, others ...context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -38,7 +38,7 @@ func CombineContext(ctx context.Context, others ... context.Context) (context.Co
 
 // combineContextWorker handles the cancel aggregation logic for CombineContext, batching contexts in groups of up to
 // five, meaning the number of goroutines can be reduced.
-func combineContextWorker(ctx <-chan struct{}, cancel context.CancelFunc, others ... <-chan struct{}) {
+func combineContextWorker(ctx <-chan struct{}, cancel context.CancelFunc, others ...<-chan struct{}) {
 	count := len(others)
 	switch {
 	case count >= 5:

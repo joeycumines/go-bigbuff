@@ -11,7 +11,7 @@ import (
 
 type mockProducer struct {
 	_delete   func(c *consumer)
-	_getAsync func(ctx context.Context, c *consumer, offset int, cancels ... context.Context) (<-chan struct {
+	_getAsync func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
 		Value interface{}
 		Error error
 	}, interface{}, error)
@@ -26,7 +26,7 @@ func (p *mockProducer) delete(c *consumer) {
 	panic("implement me")
 }
 
-func (p *mockProducer) getAsync(ctx context.Context, c *consumer, offset int, cancels ... context.Context) (<-chan struct {
+func (p *mockProducer) getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
 	Value interface{}
 	Error error
 }, interface{}, error) {

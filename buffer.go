@@ -45,7 +45,7 @@ func (b *Buffer) Done() <-chan struct{} {
 	return b.done
 }
 
-func (b *Buffer) Put(ctx context.Context, values ... interface{}) error {
+func (b *Buffer) Put(ctx context.Context, values ...interface{}) error {
 	b.ensure()
 
 	if ctx != nil {
@@ -294,7 +294,7 @@ func (b *Buffer) get(c *consumer, offset int) (interface{}, bool, error) {
 // success with value (possibly nil).
 // Any error means error, no error and any channel means async, and nil channel and nil error means a value.
 // NOTE: if a channel is returned, it will NEVER be closed, to prevent empty reads.
-func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels ... context.Context) (<-chan struct {
+func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
 	Value interface{}
 	Error error
 }, interface{}, error) {

@@ -1,6 +1,8 @@
 package bigbuff
 
 import (
+	"errors"
+	"fmt"
 	"github.com/go-test/deep"
 	"runtime"
 	"testing"
@@ -561,4 +563,19 @@ func TestBuffer_Range_one(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("unexpected number of calls", calls)
 	}
+}
+
+func TestFatalError_Error(t *testing.T) {
+	if v := FatalError(errors.New("some_error")).Error(); v != "some_error" {
+		t.Fatal(v)
+	}
+}
+
+func TestFatalError_panic(t *testing.T) {
+	defer func() {
+		if v := fmt.Sprint(recover()); v != "bigbuff.FatalError nil err" {
+			t.Error(v)
+		}
+	}()
+	_ = FatalError(nil)
 }
