@@ -273,7 +273,7 @@ func Range(ctx context.Context, consumer Consumer, fn func(index int, value inte
 				fatalErr = err
 				return
 			}
-			fatalErr = fmt.Errorf("%s\n  - %s", fatalErr.Error(), err.Error())
+			fatalErr = fmt.Errorf("%s | %s", fatalErr.Error(), err.Error())
 		}
 	)
 
