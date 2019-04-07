@@ -186,6 +186,28 @@ type (
 	fatalError struct {
 		err error
 	}
+
+	// Notifier is a tool which may be used to facilitate event handling using a fan out pattern, modeling a pattern
+	// that is better described as publish-subscribe rather than produce-consume, and tries to be semantically
+	// equivalent to implementations using channels guarded via context cancels using select statements.
+	//
+	// It sits between the Exclusive and Buffer implementations in terms of behavior, yet it's use case is still
+	// distinct. Where Buffer shines when providing multiplexing or fanning out of serializable streams of messages,
+	// and Exclusive is explicitly designed to be attached to existing expensive tasks which need to occur as a result
+	// of multiple triggers, Notifier targets reactive behavior based on asynchronous operations. It provides basic
+	// event handling without any buffering or queuing between the producer and subscriber present in the layer
+	// before the actual target channels.
+	//
+	// Note that it uses reflect internally, to avoid clients needing to rely on generic interface values.
+	Notifier struct {
+		mutex       sync.RWMutex
+		subscribers map[interface{}]map[uintptr]notifierSubscriber
+	}
+
+	notifierSubscriber struct {
+		ctx    context.Context
+		target reflect.Value
+	}
 )
 
 // DefaultCleaner is the Buffer's default cleaner, if there is at least one "active" consumer it returns the lowest
