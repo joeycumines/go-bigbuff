@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"golang.org/x/net/context"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -331,4 +332,105 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 			t.Fatal(v)
 		}
 	}
+}
+
+func ExampleNotifier_SubscribeCancel() {
+	defer func() func() {
+		startGoroutines := runtime.NumGoroutine()
+		return func() {
+			time.Sleep(time.Millisecond * 200)
+			endGoroutines := runtime.NumGoroutine()
+			if endGoroutines <= startGoroutines {
+				fmt.Println(`our resources were freed`)
+			}
+		}
+	}()()
+	var (
+		nf          Notifier
+		ping        = make(chan float64)
+		pong        = make(chan float64)
+		ctx, cancel = context.WithCancel(context.Background())
+	)
+	defer cancel()
+	defer nf.SubscribeCancel(nil, `ping`, ping)()
+	defer nf.SubscribeCancel(nil, `pong`, pong)()
+	go func() {
+		// worker which will receive all values and respond with that value x2
+		// but first... sleep, to demonstrate it's not racey
+		time.Sleep(time.Millisecond * 100)
+		for {
+			select {
+			case <-ctx.Done():
+				fmt.Println(`worker exiting`)
+				return
+			case value := <-ping:
+				nf.PublishContext(ctx, `pong`, value*2)
+			}
+		}
+	}()
+	fmt.Println(`PING 5 x 2 = ...`)
+	nf.PublishContext(ctx, `ping`, 5.0)
+	fmt.Println(`PONG`, <-pong)
+	fmt.Println(`PING -23 x 2 = ...`)
+	nf.PublishContext(ctx, `ping`, -23.0)
+	fmt.Println(`PONG`, <-pong)
+	//Output:
+	//PING 5 x 2 = ...
+	//PONG 10
+	//PING -23 x 2 = ...
+	//PONG -46
+	//worker exiting
+	//our resources were freed
+}
+
+func TestNotifier_SubscribeCancel_panic(t *testing.T) {
+	defer func() func() {
+		startGoroutines := runtime.NumGoroutine()
+		return func() {
+			time.Sleep(time.Millisecond * 200)
+			endGoroutines := runtime.NumGoroutine()
+			if endGoroutines > startGoroutines {
+				t.Error(endGoroutines, startGoroutines)
+			}
+		}
+	}()()
+	target := make(chan interface{})
+	nf := Notifier{
+		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
+			123: {
+				reflect.ValueOf(target).Pointer(): {},
+			},
+		},
+	}
+	defer func() {
+		if r := recover(); r == nil || !strings.HasPrefix(fmt.Sprint(r), `bigbuff.Notifier subscription already exists: key=123 `) {
+			t.Error(r)
+		}
+	}()
+	nf.SubscribeCancel(nil, 123, target)
+	t.Error(`expected fatal`)
+}
+
+func TestNotifier_SubscribeCancel_parentCancel(t *testing.T) {
+	defer func() func() {
+		startGoroutines := runtime.NumGoroutine()
+		return func() {
+			time.Sleep(time.Millisecond * 200)
+			endGoroutines := runtime.NumGoroutine()
+			if endGoroutines > startGoroutines {
+				t.Error(endGoroutines, startGoroutines)
+			}
+		}
+	}()()
+	var (
+		nf          Notifier
+		target      = make(chan interface{})
+		ctx, cancel = context.WithCancel(context.Background())
+	)
+	nf.SubscribeContext(ctx, nil, target)
+	go func() {
+		time.Sleep(time.Millisecond * 100)
+		cancel()
+	}()
+	nf.Publish(nil, 123)
 }

@@ -50,6 +50,33 @@ func (n *Notifier) SubscribeContext(ctx context.Context, key interface{}, target
 	n.subscribers = subscribers
 }
 
+// SubscribeCancel wraps SubscribeContext and Unsubscribe as well as the initialisation of a sub context, for defer
+// statements using the result as a one-liner, and is the most fool-proof way to implement a subscriber, at the cost
+// of less direct management of resources (including some which are potentially unnecessary, as it uses a sub-context
+// and the returned cancel obeys the contract of context.CancelFunc and does not perform Unsubscribe inline)
+func (n *Notifier) SubscribeCancel(ctx context.Context, key interface{}, target interface{}) context.CancelFunc {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			cancel()
+			panic(r)
+		}
+	}()
+
+	n.SubscribeContext(ctx, key, target)
+
+	go func() {
+		<-ctx.Done()
+		n.Unsubscribe(key, target)
+	}()
+
+	return cancel
+}
+
 // Unsubscribe deregisters a given key and target from the notifier, an action that may be performed exactly once
 // after each subscription (for the combination of key and target), preventing further messages from being published
 // to the target, and allowing freeing of associated resources WARNING subscribe context should always be canceled
@@ -155,7 +182,7 @@ func (n *Notifier) PublishContext(ctx context.Context, key interface{}, value in
 		}
 
 		for i := len(failureRefs) - 1; i >= 0; i-- {
-			if failureRefs[i] < successIndex {
+			if failureRefs[i] <= successIndex {
 				break
 			}
 			failureRefs[i]--
