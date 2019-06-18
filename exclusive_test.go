@@ -573,3 +573,89 @@ func TestCallAsync(t *testing.T) {
 		mutex.Unlock()
 	}
 }
+
+func TestExclusive_Start(t *testing.T) {
+	var (
+		mutex   sync.Mutex
+		counter int
+		final   int
+		e       Exclusive
+		wg      sync.WaitGroup
+	)
+	wg.Add(10)
+	for x := 0; x < 10; x++ {
+		go func() {
+			defer wg.Done()
+			time.Sleep(time.Millisecond * 5)
+			for x := 0; x < 10; x++ {
+				e.Start(nil, func() (i interface{}, e error) {
+					time.Sleep(time.Millisecond * 200)
+					mutex.Lock()
+					counter++
+					final = counter
+					mutex.Unlock()
+					return
+				})
+				time.Sleep(time.Millisecond * 100)
+			}
+		}()
+	}
+	wg.Wait()
+	time.Sleep(time.Millisecond * 300)
+	if counter != final {
+		t.Fatal(counter, final)
+	}
+	if final != 6 {
+		t.Fatal(final)
+	}
+}
+
+func TestExclusive_StartAfter(t *testing.T) {
+	var (
+		mutex   sync.Mutex
+		counter int
+		final   int
+		e       Exclusive
+		value   = new(int)
+		err     = errors.New(`err`)
+	)
+	e.StartAfter(
+		nil,
+		func() (interface{}, error) {
+			t.Error(`bad`)
+			panic(`bad`)
+		},
+		time.Millisecond*100,
+	)
+	outcome := e.CallAsync(
+		nil,
+		func() (i interface{}, e error) {
+			t.Error(`bad`)
+			panic(`bad`)
+		},
+	)
+	e.Start(
+		nil,
+		func() (interface{}, error) {
+			mutex.Lock()
+			counter++
+			final = counter
+			mutex.Unlock()
+			return value, err
+		},
+	)
+	if outcome := <-outcome; outcome.Result != value || outcome.Error != err {
+		t.Error(outcome)
+	}
+	mutex.Lock()
+	if counter != 1 || counter != final {
+		t.Fatal(counter)
+	}
+	mutex.Unlock()
+	time.Sleep(time.Millisecond * 200)
+	mutex.Lock()
+	if counter != 1 || counter != final {
+		t.Fatal(counter)
+	}
+	mutex.Unlock()
+}

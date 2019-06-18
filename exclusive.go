@@ -35,6 +35,20 @@ func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
 func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, error), wait time.Duration) <-chan *ExclusiveOutcome {
+	return e.call(key, value, wait, false)
+}
+
+// Start is synonymous with a CallAsync that avoids spawning a unnecessary goroutines to wait for results
+func (e *Exclusive) Start(key interface{}, value func() (interface{}, error)) {
+	e.StartAfter(key, value, 0)
+}
+
+// StartAfter is synonymous with a CallAfterAsync that avoids spawning a unnecessary goroutines to wait for results
+func (e *Exclusive) StartAfter(key interface{}, value func() (interface{}, error), wait time.Duration) {
+	e.call(key, value, wait, true)
+}
+
+func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wait time.Duration, start bool) <-chan *ExclusiveOutcome {
 	if e == nil || value == nil {
 		panic(errors.New("bigbuff.Exclusive receiver and value must be non-nil"))
 	}
@@ -73,6 +87,12 @@ func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, e
 			break
 		}
 		item.mutex.Unlock()
+	}
+
+	if start && item.count != 0 {
+		item.work = value
+		item.mutex.Unlock()
+		return nil
 	}
 
 	outcome := make(chan *ExclusiveOutcome, 1)
@@ -160,6 +180,10 @@ func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, e
 
 		result, err = item.work()
 	}()
+
+	if start {
+		return nil
+	}
 
 	return outcome
 }
