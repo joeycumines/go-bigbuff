@@ -2,7 +2,6 @@ package bigbuff
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -106,13 +105,8 @@ func (w *Workers) worker() {
 				result interface{}
 				error  error
 			}
-			defer func() {
-				if r := recover(); r != nil {
-					result.error = fmt.Errorf("bigbuff.Workers recovered from panic (%T): %+v", r, r)
-				}
-				item.output <- result
-			}()
 			result.result, result.error = item.value()
+			item.output <- result
 		}()
 	}
 }
