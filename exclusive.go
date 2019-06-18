@@ -2,7 +2,6 @@ package bigbuff
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -84,9 +83,6 @@ func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, e
 			err    = errors.New("unknown error")
 		)
 		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("bigbuff.Exclusive.CallAfterAsync recovered from panic (%T): %+v", r, r)
-			}
 			outcome <- &ExclusiveOutcome{
 				Result: result,
 				Error:  err,

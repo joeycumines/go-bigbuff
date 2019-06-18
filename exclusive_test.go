@@ -2,7 +2,6 @@ package bigbuff
 
 import (
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -528,42 +527,6 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 	if c != 2 {
 		t.Error(c)
 	}
-}
-
-func TestExclusive_Call_valuePanic(t *testing.T) {
-	startGoroutines := runtime.NumGoroutine()
-	defer func() {
-		time.Sleep(time.Millisecond * 200)
-		endGoroutines := runtime.NumGoroutine()
-		if startGoroutines < endGoroutines {
-			t.Error(startGoroutines, endGoroutines)
-		}
-	}()
-
-	var (
-		e Exclusive
-		d = make(chan struct{})
-		f = func() (interface{}, error) {
-			panic("some_panic")
-		}
-	)
-
-	go func() {
-		v, err := e.CallAfter("1", f, time.Millisecond*400)
-		if v != nil || err == nil || err.Error() != "bigbuff.Exclusive.CallAfterAsync recovered from panic (string): some_panic" {
-			t.Error(v, err)
-		}
-		close(d)
-	}()
-
-	time.Sleep(time.Millisecond * 200)
-
-	v, err := e.Call("1", f)
-	if v != nil || err == nil || err.Error() != "unknown error" {
-		t.Fatal(v, err)
-	}
-
-	<-d
 }
 
 func TestCallAsync(t *testing.T) {
