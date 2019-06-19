@@ -371,3 +371,22 @@ func isFatalError(err error) bool {
 	_, ok := err.(fatalError)
 	return ok
 }
+
+// MinDuration is a simple wrapper for the function signature used by Exclusive and Workers which adds a sleep for
+// any remainder of a given duration, is intended to make it trivial to build a debounced rate limited partitioned
+// worker implementation.
+// NOTE a panic will occur if the duration d is not greater than 0, or if the function fn is nil.
+func MinDuration(d time.Duration, fn func() (interface{}, error)) func() (interface{}, error) {
+	if d <= 0 {
+		panic(fmt.Errorf("bigbuff.MinDuration invalid duration: %s", d.String()))
+	}
+	if fn == nil {
+		panic(fmt.Errorf("bigbuff.MinDuration nil function"))
+	}
+	return func() (value interface{}, err error) {
+		startedAt := time.Now()
+		value, err = fn()
+		time.Sleep(startedAt.Add(d).Sub(time.Now()))
+		return
+	}
+}

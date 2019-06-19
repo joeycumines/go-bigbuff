@@ -579,3 +579,57 @@ func TestFatalError_panic(t *testing.T) {
 	}()
 	_ = FatalError(nil)
 }
+
+func TestMinDuration_panicZero(t *testing.T) {
+	defer func() {
+		if r := recover(); fmt.Sprint(r) != `bigbuff.MinDuration invalid duration: 0s` {
+			t.Error(r)
+		}
+	}()
+	MinDuration(0, func() (i interface{}, e error) { return })
+	t.Error(`expected panic`)
+}
+
+func TestMinDuration_panicNil(t *testing.T) {
+	defer func() {
+		if r := recover(); fmt.Sprint(r) != `bigbuff.MinDuration nil function` {
+			t.Error(r)
+		}
+	}()
+	MinDuration(time.Millisecond, nil)
+	t.Error(`expected panic`)
+}
+
+func TestMinDuration(t *testing.T) {
+	var (
+		r  = func() (interface{}, error) { return nil, nil }
+		fn = func() func() (time.Duration, interface{}, error) {
+			fn := MinDuration(
+				time.Millisecond*100,
+				func() (interface{}, error) {
+					return r()
+				},
+			)
+			return func() (d time.Duration, v interface{}, e error) {
+				t := time.Now()
+				v, e = fn()
+				d = time.Now().Sub(t)
+				return
+			}
+		}()
+		diff = func(a, b time.Duration) (c time.Duration) {
+			c = a - b
+			if c < 0 {
+				c *= -1
+			}
+			return
+		}
+	)
+	if d, v, e := fn(); diff(d, time.Millisecond*100) > time.Millisecond*50 || v != nil || e != nil {
+		t.Error(d, v, e)
+	}
+	r = func() (interface{}, error) { time.Sleep(time.Millisecond * 200); return 512, errors.New(`some_error`) }
+	if d, v, e := fn(); diff(d, time.Millisecond*200) > time.Millisecond*50 || v != 512 || e == nil || e.Error() != `some_error` {
+		t.Error(d, v, e)
+	}
+}
