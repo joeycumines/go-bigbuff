@@ -15,7 +15,7 @@ func TestWaitCond_canceled(t *testing.T) {
 	err := WaitCond(ctx, cond, func() bool {
 		panic("some_error")
 	})
-	if err == nil || err.Error() != "bigbuff.WaitCond context error: context canceled" {
+	if err != context.Canceled {
 		t.Fatal("unexpected error", err)
 	}
 	cond.L.Lock()
@@ -113,7 +113,7 @@ func TestWaitCond_contextCancel(t *testing.T) {
 	cond.L.Unlock()
 
 	err := <-out
-	if err == nil || err.Error() != "bigbuff.WaitCond context error: context canceled" {
+	if err != context.Canceled {
 		t.Fatal("unexpected error", err)
 	}
 

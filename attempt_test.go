@@ -159,3 +159,38 @@ func ExampleLinearAttempt_slowConsumer() {
 	//7 7
 	//8 8
 }
+
+type contextNeverDone struct {
+	context.Context
+}
+
+var notDone = make(chan struct{})
+
+func (c contextNeverDone) Done() <-chan struct{} {
+	return notDone
+}
+
+func ExampleLinearAttempt_atMostOneTickAfterCancel() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	i := 0
+	for range LinearAttempt(contextNeverDone{ctx}, time.Millisecond*50, 10) {
+		i++
+		fmt.Printf("iteration #%d\n", i)
+		if i < 5 {
+			continue
+		}
+		cancel()
+		time.Sleep(time.Millisecond * 100)
+		fmt.Println(`canceled...`)
+	}
+	fmt.Printf("%d iterations\n", i)
+	//output:
+	//iteration #1
+	//iteration #2
+	//iteration #3
+	//iteration #4
+	//iteration #5
+	//canceled...
+	//5 iterations
+}

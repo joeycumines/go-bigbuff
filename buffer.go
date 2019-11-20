@@ -50,7 +50,7 @@ func (b *Buffer) Put(ctx context.Context, values ...interface{}) error {
 
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("bigbuff.Buffer.Put input context error: %s", err.Error())
+			return err
 		}
 	}
 
@@ -58,7 +58,7 @@ func (b *Buffer) Put(ctx context.Context, values ...interface{}) error {
 	defer b.mutex.Unlock()
 
 	if err := b.ctx.Err(); err != nil {
-		return fmt.Errorf("bigbuff.Buffer.Put internal context error: %s", err.Error())
+		return err
 	}
 
 	b.buffer = append(b.buffer, values...)
@@ -75,7 +75,7 @@ func (b *Buffer) NewConsumer() (Consumer, error) {
 	defer b.mutex.Unlock()
 
 	if err := b.ctx.Err(); err != nil {
-		return nil, fmt.Errorf("bigbuff.Buffer.NewConsumer context error: %s", err.Error())
+		return nil, err
 	}
 
 	c := &consumer{
@@ -260,7 +260,7 @@ func (b *Buffer) commit(c *consumer, offset int) error {
 func (b *Buffer) get(c *consumer, offset int) (interface{}, bool, error) {
 	// check we haven't got a cancelled context
 	if err := b.ctx.Err(); err != nil {
-		return nil, false, fmt.Errorf("bigbuff.Buffer.get context error: %s", err.Error())
+		return nil, false, err
 	}
 
 	// retrieve the stored offset for the consumer
@@ -322,26 +322,6 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 
 	// spawn a sender for it
 	go func() {
-		// result will ALWAYS be sent to out
-		var result struct {
-			Value interface{}
-			Error error
-		}
-
-		// defer the actual send to ensure the above
-		defer func() {
-			out <- result
-		}()
-
-		// handle any recover before the send - forcibly sets an error
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			result.Error = fmt.Errorf("bigbuff.Buffer.getAsync recovered from panic: %+v", r)
-		}()
-
 		// we need to wait for the value in the buffer, so we need to write lock the buffer
 		b.mutex.Lock()
 		defer b.mutex.Unlock()
@@ -349,6 +329,10 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 		// to break it down, while the input context is open AND the the buffer context is open AND all cancels
 		// (contexts provided as the last vararg) are open, block on changes to the buffer, running the sync get as
 		// before, until it either fails with error, or it returns true with a value.
+		var result struct {
+			Value interface{}
+			Error error
+		}
 		if err := WaitCond(
 			CombineContext(
 				ctx, // the input context is used as the master
@@ -373,11 +357,12 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 					return true // exits the wait loop
 				}
 				return false // still no result or error, continue to wait
-			},      // waits until get either errors or succeeds (or context cancel)
+			}, // waits until get either errors or succeeds (or context cancel)
 		); err != nil && result.Error == nil { // avoid overwriting internal errors with context errors
 			// async error case due to context error
-			result.Error = fmt.Errorf("bigbuff.Buffer.getAsync context error: %s", err.Error())
+			result.Error = err
 		}
+		out <- result
 	}()
 
 	// return the channel so the async case can be resolved in the consumer logic

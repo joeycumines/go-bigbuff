@@ -153,7 +153,7 @@ func TestConsumer_Get_canceledInput(t *testing.T) {
 		t.Error("unexpected value", v)
 	}
 
-	if err == nil || err.Error() != "bigbuff.consumer.Get input context error: context canceled" {
+	if err != context.Canceled {
 		t.Error("unexpected err", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestConsumer_Get_canceledInternal(t *testing.T) {
 		t.Error("unexpected value", v)
 	}
 
-	if err == nil || err.Error() != "bigbuff.consumer.Get internal context error: context canceled" {
+	if err != context.Canceled {
 		t.Error("unexpected err", err)
 	}
 
@@ -198,7 +198,7 @@ func TestConsumer_Get_syncError(t *testing.T) {
 		t.Error("unexpected value", v)
 	}
 
-	if err == nil || err.Error() != "bigbuff.consumer.Get sync get error: some_error" {
+	if err == nil || err.Error() != "some_error" {
 		t.Error("unexpected err", err)
 	}
 
@@ -335,12 +335,11 @@ func TestConsumer_Get_asyncError(t *testing.T) {
 	}()
 
 	v, err := c.Get(context.Background())
-
 	if v != nil {
 		t.Error("unexpected value", v)
 	}
 
-	if err == nil || err.Error() != "bigbuff.consumer.Get async get error: some_error" {
+	if err == nil || err.Error() != "some_error" {
 		t.Error("unexpected err", err)
 	}
 
@@ -488,7 +487,7 @@ func TestConsumer_Commit_error(t *testing.T) {
 		},
 	}
 
-	if err := c.Commit(); err == nil || err.Error() != "bigbuff.consumer.Commit commit error: some_error" {
+	if err := c.Commit(); err == nil || err.Error() != "some_error" {
 		t.Error("unexpected error", err)
 	}
 

@@ -1,9 +1,9 @@
 package bigbuff
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/net/context"
 	"reflect"
 	"runtime"
 	"strings"

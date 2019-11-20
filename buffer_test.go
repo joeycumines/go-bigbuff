@@ -242,7 +242,7 @@ func TestBuffer_Put_canceledInput(t *testing.T) {
 	cancel()
 	b := new(Buffer)
 	err := b.Put(ctx)
-	if err == nil || err.Error() != "bigbuff.Buffer.Put input context error: context canceled" {
+	if err != context.Canceled {
 		t.Fatal("unexpected error", err)
 	}
 	if b.cond == nil {
@@ -260,7 +260,7 @@ func TestBuffer_Put_canceledInternal(t *testing.T) {
 	b.mutex.RLock()
 	go func() {
 		err := b.Put(nil)
-		if err == nil || err.Error() != "bigbuff.Buffer.Put internal context error: context canceled" {
+		if err != context.Canceled {
 			t.Error("unexpected error", err)
 		}
 		out <- struct{}{}
@@ -387,7 +387,7 @@ func TestBuffer_NewConsumer_canceledInternal(t *testing.T) {
 		if c != nil {
 			t.Error("expected nil consumer")
 		}
-		if err == nil || err.Error() != "bigbuff.Buffer.NewConsumer context error: context canceled" {
+		if err != context.Canceled {
 			t.Error("unexpected error", err)
 		}
 		out <- struct{}{}

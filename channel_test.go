@@ -704,7 +704,7 @@ func TestChannel_Get(t *testing.T) {
 
 	vb := <-blockedGet
 
-	if vb.Value != nil || vb.Error == nil || vb.Error.Error() != "bigbuff.Channel.Get internal context error: context canceled" {
+	if vb.Value != nil || vb.Error != context.Canceled {
 		t.Error("unexpected final value", vb)
 	}
 
@@ -714,7 +714,7 @@ func TestChannel_Get(t *testing.T) {
 
 	// check a new get
 	vb.Value, vb.Error = c.Get(nil)
-	if vb.Value != nil || vb.Error == nil || vb.Error.Error() != "bigbuff.Channel.Get internal context error: context canceled" {
+	if vb.Value != nil || vb.Error != context.Canceled {
 		t.Error("unexpected final value", vb)
 	}
 
@@ -756,7 +756,7 @@ func TestConsumer_Get_inputCanceled(t *testing.T) {
 		if v != nil {
 			t.Error("unexpected value", v)
 		}
-		if err == nil || err.Error() != "bigbuff.Channel.Get input context error: context canceled" {
+		if err != context.Canceled {
 			t.Error("unexpected err", err)
 		}
 	}()
@@ -772,7 +772,7 @@ func TestConsumer_Get_inputCanceled(t *testing.T) {
 	if v != nil {
 		t.Error("unexpected value", v)
 	}
-	if err == nil || err.Error() != "bigbuff.Channel.Get input context error: context canceled" {
+	if err != context.Canceled {
 		t.Error("unexpected err", err)
 	}
 }
@@ -840,7 +840,7 @@ func TestChannel_Commit_errs(t *testing.T) {
 	cancel()
 
 	err = c.Commit()
-	if err == nil || err.Error() != "bigbuff.Channel.Commit context error: context canceled" {
+	if err != context.Canceled {
 		t.Fatal("unexpected err", err)
 	}
 

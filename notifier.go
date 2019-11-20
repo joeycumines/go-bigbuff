@@ -58,22 +58,22 @@ func (n *Notifier) SubscribeCancel(ctx context.Context, key interface{}, target 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
+	var (
+		success bool
+		cancel  context.CancelFunc
+	)
+	ctx, cancel = context.WithCancel(ctx)
 	defer func() {
-		if r := recover(); r != nil {
+		if !success {
 			cancel()
-			panic(r)
 		}
 	}()
-
 	n.SubscribeContext(ctx, key, target)
-
 	go func() {
 		<-ctx.Done()
 		n.Unsubscribe(key, target)
 	}()
-
+	success = true
 	return cancel
 }
 

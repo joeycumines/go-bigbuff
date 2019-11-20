@@ -272,74 +272,54 @@ func FixedBufferCleaner(
 // by panics, note that the index will be the index in THIS range, starting at 0, and incrementing by one with each
 // call to fn.
 // NOTE: the ctx value will be passed into the consumer.Get as-is.
-func Range(ctx context.Context, consumer Consumer, fn func(index int, value interface{}) bool) error {
+func Range(ctx context.Context, consumer Consumer, fn func(index int, value interface{}) bool) (err error) {
 	if consumer == nil {
-		return errors.New("bigbuff.Range requires non-nil consumer")
+		err = errors.New("bigbuff.Range requires non-nil consumer")
+		return
 	}
-
 	if fn == nil {
-		return errors.New("bigbuff.Range requires non-nil fn")
+		err = errors.New("bigbuff.Range requires non-nil fn")
+		return
 	}
 
-	var (
-		fatalErr error = nil
-		running        = true
-		// rollback handles any rollback + any error including any required append logic to get a full fatal error
-		rollback = func() {
-			err := consumer.Rollback()
-			if err == nil {
-				return
-			}
-			err = fmt.Errorf("bigbuff.Range rollback error: %s", err.Error())
-			if fatalErr == nil {
-				fatalErr = err
-				return
-			}
-			fatalErr = fmt.Errorf("%s | %s", fatalErr.Error(), err.Error())
-		}
-	)
-
-	// while we are running (haven't returned false from fn) and there are no fatal errors
-	for index := 0; running && fatalErr == nil; index++ {
+	for index := 0; ; index++ {
 		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("bigbuff.Range context error: %s", err.Error())
+			err = ctx.Err()
+			if err != nil {
+				break
 			}
 		}
 
-		// closure so we can recover via defer without memory leaks
-		func() {
-			// catch / throw pattern for rollbacks
+		if !func() (ok bool) {
+			var success bool
 			defer func() {
-				r := recover()
-				if r == nil {
-					return
+				if !success {
+					_ = consumer.Rollback()
 				}
-				rollback()
-				panic(r)
 			}()
 
-			if value, err := consumer.Get(ctx); err != nil { // perform a get, setting fatal error if it fails
-				fatalErr = fmt.Errorf("bigbuff.Range get error: %s", err.Error())
-			} else if !fn(index, value) { // if we got a value, call fn with the (index, value), handles stop
-				running = false
+			var value interface{}
+			value, err = consumer.Get(ctx)
+			if err != nil {
+				return
 			}
 
-			// EITHER commit (no error) OR rollback (error)
-			if fatalErr == nil {
-				// commit failures also set fatal error
-				if err := consumer.Commit(); err != nil {
-					fatalErr = fmt.Errorf("bigbuff.Range commit error: %s", err.Error())
-				}
-			} else {
-				// we had a fatal error in this iteration, rollback before exit
-				rollback()
+			ok = fn(index, value)
+
+			err = consumer.Commit()
+			if err != nil {
+				return
 			}
-		}()
+
+			success = true
+
+			return
+		}() {
+			break
+		}
 	}
 
-	// may be nil, or may contain any and all fatal errors that occurred in this function
-	return fatalErr
+	return
 }
 
 // FatalError wraps a given error to indicate to functions or methods that receive a closure that they should

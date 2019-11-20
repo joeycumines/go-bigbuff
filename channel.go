@@ -116,7 +116,6 @@ func (c *Channel) Get(ctx context.Context) (value interface{}, err error) {
 		if ctx != nil {
 			err = ctx.Err()
 			if err != nil {
-				err = fmt.Errorf("bigbuff.Channel.Get input context error: %s", err.Error())
 				return
 			}
 		}
@@ -130,7 +129,6 @@ func (c *Channel) Get(ctx context.Context) (value interface{}, err error) {
 			// check for context cancels - bails out if so, we must not modify the state further
 			err = c.ctx.Err()
 			if err != nil {
-				err = fmt.Errorf("bigbuff.Channel.Get internal context error: %s", err.Error())
 				return true
 			}
 
@@ -187,7 +185,7 @@ func (c *Channel) Commit() error {
 	defer c.mutex.Unlock()
 
 	if err := c.ctx.Err(); err != nil {
-		return fmt.Errorf("bigbuff.Channel.Commit context error: %s", err.Error())
+		return err
 	}
 
 	pending := c.pending()

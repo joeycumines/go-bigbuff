@@ -3,7 +3,6 @@ package bigbuff
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -26,7 +25,7 @@ func WaitCond(ctx context.Context, cond *sync.Cond, fn func() bool) error {
 	for {
 		if ctx != nil {
 			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("bigbuff.WaitCond context error: %s", err.Error())
+				return err
 			}
 			if cancel == nil {
 				ctx, cancel = context.WithCancel(ctx)

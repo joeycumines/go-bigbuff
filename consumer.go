@@ -3,7 +3,6 @@ package bigbuff
 import (
 	"context"
 	"errors"
-	"fmt"
 )
 
 // Close will close an open consumer, potentially blocking until the internal offset has been reset (changes have
@@ -51,7 +50,7 @@ func (c *consumer) Get(ctx context.Context) (interface{}, error) {
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("bigbuff.consumer.Get input context error: %s", err.Error())
+		return nil, err
 	}
 
 	c.mutex.Lock()
@@ -61,28 +60,24 @@ func (c *consumer) Get(ctx context.Context) (interface{}, error) {
 	defer cancel()
 
 	if err := c.ctx.Err(); err != nil {
-		return nil, fmt.Errorf("bigbuff.consumer.Get internal context error: %s", err.Error())
+		return nil, err
 	}
 
 	out, v, err := c.producer.getAsync(ctx, c, c.offset, c.ctx)
-
 	if err != nil {
-		return nil, fmt.Errorf("bigbuff.consumer.Get sync get error: %s", err.Error())
+		return nil, err
 	}
-
 	if out == nil {
 		// nil chan + nil err indicates sync success
 		c.offset++
 		c.cond.Broadcast()
-
 		return v, nil
 	}
 
 	// it was async
 	result := <-out
-
 	if result.Error != nil {
-		return nil, fmt.Errorf("bigbuff.consumer.Get async get error: %s", result.Error.Error())
+		return nil, result.Error
 	}
 
 	c.offset++
@@ -100,7 +95,7 @@ func (c *consumer) Commit() error {
 	}
 
 	if err := c.producer.commit(c, c.offset); err != nil {
-		return fmt.Errorf("bigbuff.consumer.Commit commit error: %s", err.Error())
+		return err
 	}
 
 	c.offset = 0

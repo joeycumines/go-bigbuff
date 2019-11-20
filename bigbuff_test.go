@@ -1,6 +1,7 @@
 package bigbuff
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/go-test/deep"
@@ -442,7 +443,7 @@ func TestFixedBufferCleaner(t *testing.T) {
 	if v != nil {
 		t.Fatal("expected nil")
 	}
-	if err == nil || err.Error() != "bigbuff.consumer.Get sync get error: bigbuff.Buffer.get offset 1 is 3 past" {
+	if err == nil || err.Error() != "bigbuff.Buffer.get offset 1 is 3 past" {
 		t.Fatal("unexpected error", err.Error())
 	}
 }
@@ -515,7 +516,7 @@ func TestFixedBufferCleaner_nil(t *testing.T) {
 	if v != nil {
 		t.Fatal("expected nil")
 	}
-	if err == nil || err.Error() != "bigbuff.consumer.Get sync get error: bigbuff.Buffer.get offset 1 is 3 past" {
+	if err == nil || err.Error() != "bigbuff.Buffer.get offset 1 is 3 past" {
 		t.Fatal("unexpected error", err.Error())
 	}
 }
@@ -632,4 +633,179 @@ func TestMinDuration(t *testing.T) {
 	if d, v, e := fn(); diff(d, time.Millisecond*200) > time.Millisecond*50 || v != 512 || e == nil || e.Error() != `some_error` {
 		t.Error(d, v, e)
 	}
+}
+
+func TestRange_nilConsumer(t *testing.T) {
+	if err := Range(context.Background(), nil, func(index int, value interface{}) bool { panic(`unexpected`) }); err == nil {
+		t.Error(err)
+	}
+}
+
+func TestRange_nilFn(t *testing.T) {
+	if err := Range(context.Background(), struct{ Consumer }{}, nil); err == nil {
+		t.Error(err)
+	}
+}
+
+func TestRange_contextGuard(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Range(ctx, struct{ Consumer }{}, func(index int, value interface{}) bool { panic(`unexpected`) }); err != context.Canceled {
+		t.Error(err)
+	}
+}
+
+func TestRange_getPanic(t *testing.T) {
+	ctx := context.WithValue(context.Background(), 1, 2)
+	err := errors.New(`some_error`)
+	var rollback int
+	defer func() {
+		if r := recover(); r != err {
+			t.Error(r, err)
+		}
+		if rollback != 1 {
+			t.Error(rollback)
+		}
+	}()
+	_ = Range(ctx, mockConsumer{
+		get: func(c context.Context) (interface{}, error) {
+			if c != ctx {
+				t.Error(c, ctx)
+			}
+			panic(err)
+		},
+		rollback: func() error {
+			rollback++
+			return nil
+		},
+	}, func(index int, value interface{}) bool { panic(`unexpected`) })
+}
+
+func TestRange_getNilContext(t *testing.T) {
+	err := errors.New(`some_error`)
+	var rollback int
+	defer func() {
+		if r := recover(); r != err {
+			t.Error(r, err)
+		}
+		if rollback != 1 {
+			t.Error(rollback)
+		}
+	}()
+	_ = Range(nil, mockConsumer{
+		get: func(c context.Context) (interface{}, error) {
+			if c != nil {
+				t.Error(c)
+			}
+			panic(err)
+		},
+		rollback: func() error {
+			rollback++
+			return nil
+		},
+	}, func(index int, value interface{}) bool { panic(`unexpected`) })
+}
+
+func TestRange_rollback(t *testing.T) {
+	var (
+		countGet      int
+		countFn       int
+		countCommit   int
+		countRollback int
+		last          string
+		expected      = errors.New(`some_error`)
+		ctx           = context.WithValue(context.Background(), `sasd`, expected)
+		actual        = Range(
+			ctx,
+			mockConsumer{
+				get: func(c context.Context) (interface{}, error) {
+					if last != `` {
+						t.Error(last)
+					}
+					last = `get`
+					countGet++
+					if ctx != c {
+						t.Error(ctx, c)
+					}
+					return expected, nil
+				},
+				rollback: func() error {
+					if last != `commit` {
+						t.Error(last)
+					}
+					last = `rollback`
+					countRollback++
+					return errors.New(`some_other_error`)
+				},
+				commit: func() error {
+					if last != `fn` {
+						t.Error(last)
+					}
+					last = `commit`
+					countCommit++
+					return expected
+				},
+			},
+			func(index int, value interface{}) bool {
+				if last != `get` {
+					t.Error(last)
+				}
+				last = `fn`
+				countFn++
+				if index != 0 {
+					t.Error(index)
+				}
+				if value != expected {
+					t.Error(value)
+				}
+				return false
+			},
+		)
+	)
+	if expected != actual {
+		t.Error(actual)
+	}
+	if last != `rollback` {
+		t.Error(last)
+	}
+	if countGet != 1 {
+		t.Error(countGet)
+	}
+	if countFn != 1 {
+		t.Error(countFn)
+	}
+	if countCommit != 1 {
+		t.Error(countCommit)
+	}
+	if countRollback != 1 {
+		t.Error(countRollback)
+	}
+}
+
+type mockConsumer struct {
+	Consumer
+	get      func(ctx context.Context) (interface{}, error)
+	commit   func() error
+	rollback func() error
+}
+
+func (m mockConsumer) Get(ctx context.Context) (interface{}, error) {
+	if m.get != nil {
+		return m.get(ctx)
+	}
+	return m.Consumer.Get(ctx)
+}
+
+func (m mockConsumer) Commit() error {
+	if m.commit != nil {
+		return m.commit()
+	}
+	return m.Consumer.Commit()
+}
+
+func (m mockConsumer) Rollback() error {
+	if m.rollback != nil {
+		return m.rollback()
+	}
+	return m.Consumer.Rollback()
 }
