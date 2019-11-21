@@ -1,4 +1,4 @@
-// Package bigbuff implements a one-many ordered queue producer-consumer pattern + utilities.
+// Package bigbuff implements many useful concurrency primitives and utilities.
 package bigbuff
 
 import (
@@ -294,6 +294,7 @@ func Range(ctx context.Context, consumer Consumer, fn func(index int, value inte
 			var success bool
 			defer func() {
 				if !success {
+					ok = false
 					_ = consumer.Rollback()
 				}
 			}()

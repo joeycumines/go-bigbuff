@@ -809,3 +809,37 @@ func (m mockConsumer) Rollback() error {
 	}
 	return m.Consumer.Rollback()
 }
+
+func TestRange_commitErrorHandling(t *testing.T) {
+	var buffer Buffer
+	defer buffer.Close()
+	consumer, err := buffer.NewConsumer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	var (
+		expected = errors.New(`some_error`)
+		output   string
+	)
+	if err := buffer.Put(context.Background(), `1`, `2`, `3`, `4`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Range(context.Background(), mockConsumer{
+		Consumer: consumer,
+		commit: func() error {
+			if output == `123` {
+				return expected
+			}
+			return consumer.Commit()
+		},
+	}, func(index int, value interface{}) bool {
+		output += value.(string)
+		return true
+	}); err != expected {
+		t.Error(err)
+	}
+	if output != `123` {
+		t.Error(output)
+	}
+}
