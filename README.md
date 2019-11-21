@@ -1,30 +1,44 @@
 # go-bigbuff
 
-> test coverage: 93.7%
+> test coverage: 97.1%
 
-Package bigbuff provides an in-memory `Buffer` implementation, which is designed to support a `Producer`-`Consumer`
-(one to many) pattern, where each consumer reads the full data set, and has their own offsets, with atomic
-commits and rollbacks. It also provides a well designed native channel backed `Consumer` implementation, that
-provides the same kind of feature set, but with is geared towards fan-in implementations, with the same benefits
-on the consumer end as provided by the `Buffer` implementation, also solving channel draining and "zero reads"
-on producer channel close (at the cost of some performance vs pure channels, of course). There are also some
-utility helper methods which are exposed as part of this package.
+Package bigbuff implements many useful concurrency primitives and utilities. It was originally created around
+`bigbuff.Buffer`, a one-to-many unbounded FIFO queue with a built in retention policy mechanism, and two interfaces
+`bigbuff.Consumer`, and `bigbuff.Producer`, which generalise the pattern in a way that supports complex use cases such
+as at-least-once semantics. Over time this package has collected a range of different, often highly specialised
+implementations, that deal with different aspects of the complicated challenge of concurrent programming.
 
 Godoc here: [github.com/joeycumines/go-bigbuff](https://godoc.org/github.com/joeycumines/go-bigbuff)
 
-Features:
- - Queue implementations with strong support for context.Context, aiming to guarantee as much data consistency
-   as possible
- - Well defined interfaces designed after the style of core golang libs
- - Handy `Range` method for iterating, with catch / throw pattern for panics
- - Exposes async util functions to combine contexts and safely perform a conditional wait via sync.Cond (no leaks)
- - Configurable cleanup behavior - control retention based on the length and consumer offsets + the min cycle wait
- - The whole reason why I implemented this in the first place, a producer implementation that is 100% safe to use
-   within a consumer processing loop (unbounded buffer size, e.g. imagine something ranging from a buffered
-   channel but also sending to it, but it's 1 consumer, so as soon as the buffer fills, it will deadlock if it
-   tries a send, and another consumer would break guaranteed in-order processing)
- - Single-channel implementation of the `bigbuff.Consumer` interface, that is uses reflection + polling to provide
-   the same commit and rollback functionality (retains order, supports any readable channel).
- - Breaking from the mould a little `bigbuff.Exclusive` allows key based locking and de-bouncing for operations 
-   that may return values like `(interface{}, error)`, operating synchronously to keep things simple
- - Useful for limiting concurrent executions `bigbuff.Workers` is compatible with `bigbuff.Exclusive`
+Specialised tools should be carefully considered against possible use cases, and those provided by this package are no
+different. A good rule of thumb is to keep them peripheral and replaceable, where possible. Choose wisely ;).
+
+## Highlights
+
+- `bigbuff.Buffer` is the most mature implementation in this package, and is battle tested one-many producer / consumer
+   implementation. It operates as an unbounded FIFO queue by default, reaping messages after they are read by all (and
+   at least one) consumer. Custom behavior may be implemented using the `bigbuff.Cleaner` type. The buffer's behavior
+   may be modified to enforce (soft) bounding of the size of the queue, via the `bigbuff.FixedBufferCleaner` function.
+   Benchmarks... someday.
+- Any readable channel may be used as a `bigbuff.Consumer`, using `bigbuff.NewChannel`
+- `bigbuff.Notifier` uses `reflect.Select` to provide synchronous fan-out pub-sub (keyed, sending to any supported
+  channel that is subscribed at time of publish). This implementation is far more compact than `bigbuff.Buffer`, but
+  at this time it is not actively being used in a production environment. It is also far slower, and suitable for a
+  much smaller number of concurrent consumers (per key / buffer instance). That said it is much easier to use, and
+  solves my original problem case of dynamically wiring up existing message processing that makes heavy use of channels
+  very well. The learning curve for this implementation should be trivial, as it's behavior is identical to direct
+  interaction with multiple channels + context, using select.
+- `bigbuff.Exclusive` is another battle-tested implementation, providing debouncing of _keyed operations_, either as
+  part of a background process, or in the foreground, potentially blocking for a return value (which may be shared
+  between multiple, debounced callers)
+- Useful for limiting concurrent executions, `bigbuff.Workers` is compatible with `bigbuff.Exclusive`. It's a simple
+  on-demand background worker orchestrator, which deliberately uses a compatible function signature with relevant
+  methods from `bigbuff.Exclusive`. `bigbuff.MinDuration` is provided in the same vein.
+
+## Caveats
+
+- All implementations were learning experiences, and in some, particularly older cases, the API has been left unchanged
+  solely for backwards compatibility
+- Unbounded queues tend to require additional management, especially if there is any chance that the consumer side may
+  fall behind the producer side (cascading failures == bad)
+- The use cases of most of these tools are complicated enough to deserve extensive examples and discussion
