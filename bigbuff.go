@@ -166,6 +166,17 @@ type (
 		work  map[interface{}]*exclusiveItem
 	}
 
+	// ExclusiveOption passes configuration into Exclusive.CallWithOptions, see also package functions prefixed with
+	// Exclusive, such as ExclusiveKey and ExclusiveWork.
+	ExclusiveOption func(c *exclusiveConfig)
+
+	exclusiveConfig struct {
+		key   interface{}
+		work  func() (interface{}, error)
+		wait  time.Duration
+		start bool
+	}
+
 	// ExclusiveOutcome is the return value from an async bigbuff.Exclusive call
 	ExclusiveOutcome struct {
 		Result interface{}

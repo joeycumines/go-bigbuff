@@ -22,6 +22,38 @@ import (
 	"time"
 )
 
+// ExclusiveKey configures a comparable value for grouping calls, for debouncing, limiting, etc.
+func ExclusiveKey(value interface{}) ExclusiveOption {
+	return func(c *exclusiveConfig) { c.key = value }
+}
+
+// ExclusiveWork configures the work function (what will actually get called).
+func ExclusiveWork(value func() (interface{}, error)) ExclusiveOption {
+	return func(c *exclusiveConfig) { c.work = value }
+}
+
+// ExclusiveWait configures the duration (since the start of the call) that should be waited, before actually calling
+// the work function, see also Exclusive.CallAfter.
+func ExclusiveWait(value time.Duration) ExclusiveOption {
+	return func(c *exclusiveConfig) { c.wait = value }
+}
+
+// ExclusiveStart configures "start" behavior for the call, which, if true, will avoid the overhead required to
+// propagate results, which will also cause the return value (outcome channel) to be nil. See also Exclusive.Start.
+func ExclusiveStart(value bool) ExclusiveOption {
+	return func(c *exclusiveConfig) { c.start = value }
+}
+
+// CallWithOptions consolidates the various different ways to use Exclusive into a single method, to improve
+// maintainability w/o breaking API compatibility. Other methods such as Call and Start will continue to be supported.
+func (e *Exclusive) CallWithOptions(options ...ExclusiveOption) <-chan *ExclusiveOutcome {
+	var config exclusiveConfig
+	for _, option := range options {
+		option(&config)
+	}
+	return e.call(config)
+}
+
 // Call uses a given key to ensure that the operation that the value callback represents will not be performed
 // concurrently, and in the event that one or more operations are attempted while a given operation is still being
 // performed, these operations will be grouped such that they are debounced to a single call, sharing the output.
@@ -51,7 +83,7 @@ func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
 func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, error), wait time.Duration) <-chan *ExclusiveOutcome {
-	return e.call(key, value, wait, false)
+	return e.CallWithOptions(ExclusiveKey(key), ExclusiveWork(value), ExclusiveWait(wait))
 }
 
 // Start is synonymous with a CallAsync that avoids spawning a unnecessary goroutines to wait for results
@@ -61,11 +93,11 @@ func (e *Exclusive) Start(key interface{}, value func() (interface{}, error)) {
 
 // StartAfter is synonymous with a CallAfterAsync that avoids spawning a unnecessary goroutines to wait for results
 func (e *Exclusive) StartAfter(key interface{}, value func() (interface{}, error), wait time.Duration) {
-	e.call(key, value, wait, true)
+	e.CallWithOptions(ExclusiveKey(key), ExclusiveWork(value), ExclusiveWait(wait), ExclusiveStart(true))
 }
 
-func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wait time.Duration, start bool) <-chan *ExclusiveOutcome {
-	if e == nil || value == nil {
+func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
+	if e == nil || c.work == nil {
 		panic(errors.New("bigbuff.Exclusive receiver and value must be non-nil"))
 	}
 
@@ -81,19 +113,19 @@ func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wai
 		if e.work == nil {
 			e.work = make(map[interface{}]*exclusiveItem)
 		}
-		if _, ok := e.work[key]; !ok {
-			e.work[key] = new(exclusiveItem)
-			e.work[key].mutex = new(sync.Mutex)
-			e.work[key].cond = sync.NewCond(e.work[key].mutex)
+		if _, ok := e.work[c.key]; !ok {
+			e.work[c.key] = new(exclusiveItem)
+			e.work[c.key].mutex = new(sync.Mutex)
+			e.work[c.key].cond = sync.NewCond(e.work[c.key].mutex)
 		}
-		item = e.work[key]
+		item = e.work[c.key]
 		e.mutex.Unlock()
 
 		// lock item then the root to check if item is still valid
 		item.mutex.Lock()
 		var valid bool
 		e.mutex.Lock()
-		if v, _ := e.work[key]; v == item {
+		if v, _ := e.work[c.key]; v == item {
 			valid = true
 		}
 		e.mutex.Unlock()
@@ -105,8 +137,8 @@ func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wai
 		item.mutex.Unlock()
 	}
 
-	if start && item.count != 0 {
-		item.work = value
+	if c.start && item.count != 0 {
+		item.work = c.work
 		item.mutex.Unlock()
 		return nil
 	}
@@ -127,7 +159,7 @@ func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wai
 		}()
 
 		// always update the work and increment count
-		item.work = value
+		item.work = c.work
 		item.count++
 
 		// wait until not running, which has two cases
@@ -152,18 +184,18 @@ func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wai
 
 		// before we remove item from the work map, handle any specified wait, unlocking while we are waiting
 		// so that other calls may register themselves on the item
-		if wait > 0 {
+		if c.wait > 0 {
 			// adjust the sleep by how long we have already waited
-			wait -= time.Now().Sub(ts)
+			c.wait -= time.Now().Sub(ts)
 			item.mutex.Unlock()
-			time.Sleep(wait)
+			time.Sleep(c.wait)
 			item.mutex.Lock()
 		}
 
 		// replace the item in the work map with a new one sharing the same mutex and cond and also running
 		// (we still use our current item, but we only want calls started BEFORE this one to share the same result)
 		e.mutex.Lock()
-		e.work[key] = &exclusiveItem{
+		e.work[c.key] = &exclusiveItem{
 			mutex:   item.mutex,
 			cond:    item.cond,
 			running: true,
@@ -187,17 +219,17 @@ func (e *Exclusive) call(key interface{}, value func() (interface{}, error), wai
 			item.complete = true
 			item.running = false
 
-			e.work[key].running = false
+			e.work[c.key].running = false
 
-			if e.work[key].count == 0 {
-				delete(e.work, key)
+			if e.work[c.key].count == 0 {
+				delete(e.work, c.key)
 			}
 		}()
 
 		result, err = item.work()
 	}()
 
-	if start {
+	if c.start {
 		return nil
 	}
 
