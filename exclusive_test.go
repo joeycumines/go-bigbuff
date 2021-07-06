@@ -675,3 +675,107 @@ func TestExclusive_StartAfter(t *testing.T) {
 	}
 	mutex.Unlock()
 }
+
+var benchmarkOutput interface{}
+
+func BenchmarkExclusive_outcomeContention(b *testing.B) {
+	for _, tc := range [...]struct {
+		Name  string
+		Count int
+	}{
+		{
+			Name:  `count 32768`,
+			Count: 1 << 15,
+		},
+		{
+			Name:  `count 16384`,
+			Count: 1 << 14,
+		},
+		{
+			Name:  `count 8192`,
+			Count: 1 << 13,
+		},
+		{
+			Name:  `count 1024`,
+			Count: 1 << 10,
+		},
+		{
+			Name:  `count 512`,
+			Count: 1 << 9,
+		},
+		{
+			Name:  `count 256`,
+			Count: 1 << 8,
+		},
+		{
+			Name:  `count 16`,
+			Count: 1 << 4,
+		},
+		{
+			Name:  `count 1`,
+			Count: 1,
+		},
+	} {
+		b.Run(tc.Name, func(b *testing.B) {
+			b.StopTimer()
+			var r int
+			for n := 0; n < b.N; n++ {
+				func() {
+					var exclusive Exclusive
+
+					// initial set up
+					initialIn := make(chan struct{})
+					defer close(initialIn)
+					initialOut := make(chan struct{})
+					defer close(initialOut)
+					initialOutcome := exclusive.CallWithOptions(ExclusiveWork(func() (interface{}, error) {
+						initialIn <- struct{}{}
+						<-initialOut
+						return 123, nil
+					}))
+					defer func() {
+						v := <-initialOutcome
+						r = v.Result.(int)
+					}()
+					<-initialIn
+
+					item := exclusive.work[nil]
+
+					in := make(chan struct{})
+					defer close(in)
+
+					var wg sync.WaitGroup
+					wg.Add(tc.Count)
+
+					for i := 0; i < tc.Count; i++ {
+						go func() {
+							v := <-exclusive.CallWithOptions(ExclusiveWork(func() (interface{}, error) {
+								in <- struct{}{}
+								return 456, nil
+							}))
+							r = v.Result.(int)
+							wg.Done()
+						}()
+					}
+
+					item.mutex.Lock()
+					for item.count != tc.Count {
+						item.mutex.Unlock()
+						time.Sleep(time.Microsecond)
+						item.mutex.Lock()
+					}
+					item.mutex.Unlock()
+
+					b.StartTimer()
+
+					initialOut <- struct{}{}
+					<-in
+					wg.Wait()
+
+					b.StopTimer()
+				}()
+			}
+			benchmarkOutput = r
+		})
+	}
+}
