@@ -17,7 +17,9 @@
 package bigbuff
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -32,8 +34,17 @@ func ExclusiveKey(value interface{}) ExclusiveOption {
 }
 
 // ExclusiveWork configures the work function (what will actually get called).
-func ExclusiveWork(value func(resolve func(result interface{}, err error))) ExclusiveOption {
+func ExclusiveWork(value WorkFunc) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.work = value }
+}
+
+// ExclusiveValue implements a simpler style of ExclusiveWork (that was originally the only supported behavior).
+func ExclusiveValue(value func() (interface{}, error)) ExclusiveOption {
+	var work WorkFunc
+	if value != nil {
+		work = func(resolve func(result interface{}, err error)) { resolve(value()) }
+	}
+	return ExclusiveWork(work)
 }
 
 // ExclusiveWait configures the duration (since the start of the call) that should be waited, before actually calling
@@ -48,12 +59,44 @@ func ExclusiveStart(value bool) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.start = value }
 }
 
-func exclusiveValue(value func() (interface{}, error)) ExclusiveOption {
-	var work func(resolve func(result interface{}, err error))
-	if value != nil {
-		work = func(resolve func(result interface{}, err error)) { resolve(value()) }
+// ExclusiveWrapper facilitates programmatic building of work, note that the ExclusiveWork or ExclusiveValue option
+// must still be provided, but may be provided in any order (after or before this option). If there are multiple
+// wrappers, they will be applied sequentially (left -> right is inner -> outer).
+func ExclusiveWrapper(value func(value WorkFunc) WorkFunc) ExclusiveOption {
+	return func(c *exclusiveConfig) { c.wrappers = append(c.wrappers, value) }
+}
+
+// ExclusiveRateLimit is typically a drop-in replacement for MinDuration that works properly with non-start calls, and
+// returns a ExclusiveWrapper option. Note that the context is for cleaning up the resources required to apply the rate
+// limit (the rate limit itself), and will also be used to guard the actual work, for safety reasons.
+func ExclusiveRateLimit(ctx context.Context, minDuration time.Duration) ExclusiveOption {
+	if ctx == nil {
+		panic(fmt.Errorf("bigbuff.ExclusiveRateLimit nil context"))
 	}
-	return ExclusiveWork(work)
+	if minDuration <= 0 {
+		panic(fmt.Errorf("bigbuff.ExclusiveRateLimit invalid duration: %s", minDuration))
+	}
+	return ExclusiveWrapper(func(value WorkFunc) WorkFunc {
+		if value == nil {
+			panic(fmt.Errorf("bigbuff.ExclusiveRateLimit nil work func"))
+		}
+		return func(resolve func(result interface{}, err error)) {
+			if err := ctx.Err(); err != nil {
+				resolve(nil, err)
+				return
+			}
+			ts := time.Now()
+			value(resolve)
+			if remainingDuration := ts.Add(minDuration).Sub(time.Now()); remainingDuration > 0 {
+				timer := time.NewTimer(remainingDuration)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+				case <-timer.C:
+				}
+			}
+		}
+	})
 }
 
 // CallWithOptions consolidates the various different ways to use Exclusive into a single method, to improve
@@ -63,6 +106,10 @@ func (e *Exclusive) CallWithOptions(options ...ExclusiveOption) <-chan *Exclusiv
 	for _, option := range options {
 		option(&config)
 	}
+	for _, wrapper := range config.wrappers {
+		config.work = wrapper(config.work)
+	}
+	config.wrappers = nil
 	return e.call(config)
 }
 
@@ -95,7 +142,7 @@ func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
 func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, error), wait time.Duration) <-chan *ExclusiveOutcome {
-	return e.CallWithOptions(ExclusiveKey(key), exclusiveValue(value), ExclusiveWait(wait))
+	return e.CallWithOptions(ExclusiveKey(key), ExclusiveValue(value), ExclusiveWait(wait))
 }
 
 // Start is synonymous with a CallAsync that avoids spawning a unnecessary goroutines to wait for results
@@ -105,7 +152,7 @@ func (e *Exclusive) Start(key interface{}, value func() (interface{}, error)) {
 
 // StartAfter is synonymous with a CallAfterAsync that avoids spawning a unnecessary goroutines to wait for results
 func (e *Exclusive) StartAfter(key interface{}, value func() (interface{}, error), wait time.Duration) {
-	e.CallWithOptions(ExclusiveKey(key), exclusiveValue(value), ExclusiveWait(wait), ExclusiveStart(true))
+	e.CallWithOptions(ExclusiveKey(key), ExclusiveValue(value), ExclusiveWait(wait), ExclusiveStart(true))
 }
 
 func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
@@ -266,7 +313,6 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 		}
 		nextItem.cond.Broadcast()
 		nextItem.mutex.Unlock()
-
 	}()
 
 	return outcome

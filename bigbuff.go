@@ -166,15 +166,19 @@ type (
 		work  map[interface{}]*exclusiveItem
 	}
 
+	// WorkFunc is a work function, as used by Exclusive.
+	WorkFunc func(resolve func(result interface{}, err error))
+
 	// ExclusiveOption passes configuration into Exclusive.CallWithOptions, see also package functions prefixed with
 	// Exclusive, such as ExclusiveKey and ExclusiveWork.
 	ExclusiveOption func(c *exclusiveConfig)
 
 	exclusiveConfig struct {
-		key   interface{}
-		work  func(resolve func(result interface{}, err error))
-		wait  time.Duration
-		start bool
+		key      interface{}
+		work     WorkFunc
+		wait     time.Duration
+		start    bool
+		wrappers []func(value WorkFunc) WorkFunc
 	}
 
 	// ExclusiveOutcome is the return value from an async bigbuff.Exclusive call
@@ -187,7 +191,7 @@ type (
 		mutex    *sync.Mutex
 		cond     *sync.Cond
 		ts       time.Time
-		work     func(resolve func(result interface{}, err error))
+		work     WorkFunc
 		wait     time.Duration
 		running  bool
 		complete bool
