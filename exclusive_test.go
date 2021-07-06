@@ -728,7 +728,7 @@ func BenchmarkExclusive_outcomeContention(b *testing.B) {
 					defer close(initialIn)
 					initialOut := make(chan struct{})
 					defer close(initialOut)
-					initialOutcome := exclusive.CallWithOptions(ExclusiveWork(func() (interface{}, error) {
+					initialOutcome := exclusive.CallWithOptions(exclusiveValue(func() (interface{}, error) {
 						initialIn <- struct{}{}
 						<-initialOut
 						return 123, nil
@@ -749,7 +749,7 @@ func BenchmarkExclusive_outcomeContention(b *testing.B) {
 
 					for i := 0; i < tc.Count; i++ {
 						go func() {
-							v := <-exclusive.CallWithOptions(ExclusiveWork(func() (interface{}, error) {
+							v := <-exclusive.CallWithOptions(exclusiveValue(func() (interface{}, error) {
 								in <- struct{}{}
 								return 456, nil
 							}))

@@ -172,7 +172,7 @@ type (
 
 	exclusiveConfig struct {
 		key   interface{}
-		work  func() (interface{}, error)
+		work  func(resolve func(result interface{}, err error))
 		wait  time.Duration
 		start bool
 	}
@@ -186,7 +186,9 @@ type (
 	exclusiveItem struct {
 		mutex    *sync.Mutex
 		cond     *sync.Cond
-		work     func() (interface{}, error)
+		ts       time.Time
+		work     func(resolve func(result interface{}, err error))
+		wait     time.Duration
 		running  bool
 		complete bool
 		count    int

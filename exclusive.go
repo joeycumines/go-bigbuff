@@ -22,13 +22,17 @@ import (
 	"time"
 )
 
+var (
+	errResolveNotCalled = errors.New(`bigbuff.Exclusive resolve not called`)
+)
+
 // ExclusiveKey configures a comparable value for grouping calls, for debouncing, limiting, etc.
 func ExclusiveKey(value interface{}) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.key = value }
 }
 
 // ExclusiveWork configures the work function (what will actually get called).
-func ExclusiveWork(value func() (interface{}, error)) ExclusiveOption {
+func ExclusiveWork(value func(resolve func(result interface{}, err error))) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.work = value }
 }
 
@@ -42,6 +46,14 @@ func ExclusiveWait(value time.Duration) ExclusiveOption {
 // propagate results, which will also cause the return value (outcome channel) to be nil. See also Exclusive.Start.
 func ExclusiveStart(value bool) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.start = value }
+}
+
+func exclusiveValue(value func() (interface{}, error)) ExclusiveOption {
+	var work func(resolve func(result interface{}, err error))
+	if value != nil {
+		work = func(resolve func(result interface{}, err error)) { resolve(value()) }
+	}
+	return ExclusiveWork(work)
 }
 
 // CallWithOptions consolidates the various different ways to use Exclusive into a single method, to improve
@@ -83,7 +95,7 @@ func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
 func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, error), wait time.Duration) <-chan *ExclusiveOutcome {
-	return e.CallWithOptions(ExclusiveKey(key), ExclusiveWork(value), ExclusiveWait(wait))
+	return e.CallWithOptions(ExclusiveKey(key), exclusiveValue(value), ExclusiveWait(wait))
 }
 
 // Start is synonymous with a CallAsync that avoids spawning a unnecessary goroutines to wait for results
@@ -93,7 +105,7 @@ func (e *Exclusive) Start(key interface{}, value func() (interface{}, error)) {
 
 // StartAfter is synonymous with a CallAfterAsync that avoids spawning a unnecessary goroutines to wait for results
 func (e *Exclusive) StartAfter(key interface{}, value func() (interface{}, error), wait time.Duration) {
-	e.CallWithOptions(ExclusiveKey(key), ExclusiveWork(value), ExclusiveWait(wait), ExclusiveStart(true))
+	e.CallWithOptions(ExclusiveKey(key), exclusiveValue(value), ExclusiveWait(wait), ExclusiveStart(true))
 }
 
 func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
@@ -101,12 +113,8 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 		panic(errors.New("bigbuff.Exclusive receiver and value must be non-nil"))
 	}
 
-	var (
-		ts   = time.Now()
-		item *exclusiveItem
-	)
-
 	// find or create item
+	var item *exclusiveItem
 	for {
 		// init map and obtain item
 		e.mutex.Lock()
@@ -114,65 +122,77 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 			e.work = make(map[interface{}]*exclusiveItem)
 		}
 		if _, ok := e.work[c.key]; !ok {
-			e.work[c.key] = new(exclusiveItem)
-			e.work[c.key].mutex = new(sync.Mutex)
-			e.work[c.key].cond = sync.NewCond(e.work[c.key].mutex)
+			var mu sync.Mutex
+			e.work[c.key] = &exclusiveItem{
+				mutex: &mu,
+				cond:  sync.NewCond(&mu),
+			}
 		}
 		item = e.work[c.key]
 		e.mutex.Unlock()
 
 		// lock item then the root to check if item is still valid
 		item.mutex.Lock()
+
 		var valid bool
+
+		// check validity of item and initialise if so
 		e.mutex.Lock()
 		if v, _ := e.work[c.key]; v == item {
 			valid = true
+
+			// start waiting (for the purposes of the wait option)
+			if item.ts == (time.Time{}) {
+				item.ts = time.Now()
+			}
+
+			item.work = c.work
+			item.wait = c.wait
+
+			// WARNING see how this is used in the outcome handling
+			item.count++
+
+			// escape hatch for start case (avoids unnecessary contention)
+			if c.start && item.count != 1 {
+				e.mutex.Unlock()
+				item.mutex.Unlock()
+				return nil
+			}
 		}
 		e.mutex.Unlock()
+
 		if valid {
 			// keep the item lock to prevent it from being no longer valid
 			// (we remove from the map after obtaining item > root, in the same way)
 			break
 		}
+
 		item.mutex.Unlock()
 	}
 
-	if c.start && item.count != 0 {
-		item.work = c.work
-		item.mutex.Unlock()
-		return nil
+	// all cases except "start" (no wait on outcome) return a non-nil channel
+	var outcome chan *ExclusiveOutcome
+	if !c.start {
+		outcome = make(chan *ExclusiveOutcome, 1)
 	}
-
-	outcome := make(chan *ExclusiveOutcome, 1)
 
 	go func() {
-		var (
-			result interface{}
-			err    = errors.New("unknown error")
-		)
-		defer func() {
-			outcome <- &ExclusiveOutcome{
-				Result: result,
-				Error:  err,
-			}
-			close(outcome)
-		}()
-
-		// always update the work and increment count
-		item.work = c.work
-		item.count++
-
 		// wait until not running, which has two cases
 		// 1) newly initialised item or item initialised while running
-		// 2) item has been completed
+		// 2) item has been completed (by another waiter in the same batch)
 		for item.running {
 			item.cond.Wait()
 		}
 
 		if item.complete {
 			// case 2)
-			result = item.result
-			err = item.err
+			if outcome != nil {
+				outcome <- &ExclusiveOutcome{
+					Result: item.result,
+					Error:  item.err,
+				}
+				close(outcome)
+			}
 			item.mutex.Unlock()
 			return
 		}
@@ -184,54 +204,70 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 
 		// before we remove item from the work map, handle any specified wait, unlocking while we are waiting
 		// so that other calls may register themselves on the item
-		if c.wait > 0 {
+		if item.wait > 0 {
 			// adjust the sleep by how long we have already waited
-			c.wait -= time.Now().Sub(ts)
-			item.mutex.Unlock()
-			time.Sleep(c.wait)
-			item.mutex.Lock()
+			if wait := item.wait - time.Since(item.ts); wait > 0 {
+				item.mutex.Unlock()
+				time.Sleep(wait)
+				item.mutex.Lock()
+			}
 		}
 
 		// replace the item in the work map with a new one sharing the same mutex and cond and also running
 		// (we still use our current item, but we only want calls started BEFORE this one to share the same result)
 		e.mutex.Lock()
-		e.work[c.key] = &exclusiveItem{
+		nextItem := &exclusiveItem{
 			mutex:   item.mutex,
 			cond:    item.cond,
 			running: true,
 		}
+		e.work[c.key] = nextItem
 		e.mutex.Unlock()
 
 		// release the mutex while we do the work
 		item.mutex.Unlock()
 
-		defer func() {
-			item.mutex.Lock()
-			defer item.mutex.Unlock()
+		// call the work function, guaranteeing resolve, and blocking until work is complete
+		{
+			var (
+				once    sync.Once
+				resolve = func(result interface{}, err error) {
+					once.Do(func() {
+						if outcome != nil {
+							outcome <- &ExclusiveOutcome{
+								Result: result,
+								Error:  err,
+							}
+							close(outcome)
+						}
+						item.mutex.Lock()
+						item.result = result
+						item.err = err
+						item.complete = true
+						item.running = false
+						item.cond.Broadcast()
+						item.mutex.Unlock()
+					})
+				}
+			)
+			item.work(resolve)
+			resolve(nil, errResolveNotCalled)
+		}
 
+		// note this is the same mutex
+		// the reason why we don't just do this as part of resolve is to allow the work func to apply limiting
+		// (setting nextItem.running to false is what actually triggers the next job, if any)
+		nextItem.mutex.Lock()
+		nextItem.running = false
+		if nextItem.count == 0 {
 			e.mutex.Lock()
-			defer e.mutex.Unlock()
+			delete(e.work, c.key)
+			e.mutex.Unlock()
+		}
+		nextItem.cond.Broadcast()
+		nextItem.mutex.Unlock()
 
-			defer item.cond.Broadcast()
-
-			item.result = result
-			item.err = err
-			item.complete = true
-			item.running = false
-
-			e.work[c.key].running = false
-
-			if e.work[c.key].count == 0 {
-				delete(e.work, c.key)
-			}
-		}()
-
-		result, err = item.work()
 	}()
-
-	if c.start {
-		return nil
-	}
 
 	return outcome
 }
