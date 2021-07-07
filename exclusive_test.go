@@ -17,8 +17,11 @@
 package bigbuff
 
 import (
+	"context"
 	"errors"
+	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -674,4 +677,188 @@ func TestExclusive_StartAfter(t *testing.T) {
 		t.Fatal(counter)
 	}
 	mutex.Unlock()
+}
+
+var benchmarkOutput interface{}
+
+func BenchmarkExclusive_outcomeContention(b *testing.B) {
+	for _, tc := range [...]struct {
+		Name  string
+		Count int
+	}{
+		{
+			Name:  `count 32768`,
+			Count: 1 << 15,
+		},
+		{
+			Name:  `count 16384`,
+			Count: 1 << 14,
+		},
+		{
+			Name:  `count 8192`,
+			Count: 1 << 13,
+		},
+		{
+			Name:  `count 1024`,
+			Count: 1 << 10,
+		},
+		{
+			Name:  `count 512`,
+			Count: 1 << 9,
+		},
+		{
+			Name:  `count 256`,
+			Count: 1 << 8,
+		},
+		{
+			Name:  `count 16`,
+			Count: 1 << 4,
+		},
+		{
+			Name:  `count 1`,
+			Count: 1,
+		},
+	} {
+		b.Run(tc.Name, func(b *testing.B) {
+			b.StopTimer()
+			var r int
+			for n := 0; n < b.N; n++ {
+				func() {
+					var exclusive Exclusive
+
+					// initial set up
+					initialIn := make(chan struct{})
+					defer close(initialIn)
+					initialOut := make(chan struct{})
+					defer close(initialOut)
+					initialOutcome := exclusive.CallWithOptions(ExclusiveValue(func() (interface{}, error) {
+						initialIn <- struct{}{}
+						<-initialOut
+						return 123, nil
+					}))
+					defer func() {
+						v := <-initialOutcome
+						r = v.Result.(int)
+					}()
+					<-initialIn
+
+					item := exclusive.work[nil]
+
+					in := make(chan struct{})
+					defer close(in)
+
+					var wg sync.WaitGroup
+					wg.Add(tc.Count)
+
+					for i := 0; i < tc.Count; i++ {
+						go func() {
+							v := <-exclusive.CallWithOptions(ExclusiveValue(func() (interface{}, error) {
+								in <- struct{}{}
+								return 456, nil
+							}))
+							r = v.Result.(int)
+							wg.Done()
+						}()
+					}
+
+					item.mutex.Lock()
+					for item.count != tc.Count {
+						item.mutex.Unlock()
+						time.Sleep(time.Microsecond)
+						item.mutex.Lock()
+					}
+					item.mutex.Unlock()
+
+					b.StartTimer()
+
+					initialOut <- struct{}{}
+					<-in
+					wg.Wait()
+
+					b.StopTimer()
+				}()
+			}
+			benchmarkOutput = r
+		})
+	}
+}
+
+func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
+	var (
+		x     Exclusive
+		calls int32
+	)
+	if v := x.CallWithOptions(ExclusiveStart(true), ExclusiveWork(func(resolve func(result interface{}, err error)) { atomic.AddInt32(&calls, 1) })); v != nil {
+		t.Error()
+	}
+	for i := time.Duration(0); i < 1000 && atomic.LoadInt32(&calls) == 0; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if v := atomic.LoadInt32(&calls); v != 1 {
+		t.Error(v)
+	}
+}
+
+func TestExclusive_CallWithOptions_resolveNotCalled(t *testing.T) {
+	v := <-new(Exclusive).CallWithOptions(ExclusiveWork(func(resolve func(result interface{}, err error)) {}))
+	if v.Error != errResolveNotCalled || v.Result != nil {
+		t.Error(v)
+	}
+}
+
+func TestExclusiveRateLimit(t *testing.T) {
+	const (
+		num  = 100
+		wait = time.Millisecond * 500
+		min  = time.Millisecond * 60
+	)
+	var (
+		x       Exclusive
+		called  int64
+		shorter int64
+		wg      sync.WaitGroup
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	wg.Add(num)
+	for i := 0; i < num; i++ {
+		go func() {
+			var last int64
+			for {
+				ts := time.Now()
+				v := <-x.CallWithOptions(
+					ExclusiveRateLimit(ctx, min),
+					ExclusiveWork(func(resolve func(result interface{}, err error)) { resolve(atomic.AddInt64(&called, 1), nil) }),
+				)
+				if d := time.Since(ts); d <= min/2 {
+					atomic.AddInt64(&shorter, 1)
+				}
+				if v.Error != nil {
+					if v.Error != context.DeadlineExceeded {
+						t.Error(v)
+					}
+					break
+				}
+				this := v.Result.(int64)
+				if this <= last {
+					t.Error(this, last)
+				}
+				last = this
+			}
+			wg.Done()
+		}()
+	}
+	<-ctx.Done()
+	ts := time.Now()
+	wg.Wait()
+	if d := time.Since(ts); d > time.Millisecond*10 {
+		t.Error(d)
+	}
+	if v := atomic.LoadInt64(&shorter); v <= num/2 {
+		t.Error(v)
+	}
+	if v := math.Round(math.Abs(float64(atomic.LoadInt64(&called)) - float64(wait)/float64(min))); v > 1 {
+		t.Error(v)
+	}
+	//t.Log(atomic.LoadInt64(&called), atomic.LoadInt64(&shorter))
 }
