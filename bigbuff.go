@@ -279,8 +279,8 @@ func DefaultCleaner(size int, offsets []int) int {
 // This has the effect of causing any consumers that were running behind the target size (in terms of their read
 // position in the buffer) to fail on any further Get calls.
 func FixedBufferCleaner(
-	max int,                                                    // max size before forced cleanup is triggered
-	target int,                                                 // target size when forced cleanup is triggered
+	max int, // max size before forced cleanup is triggered
+	target int, // target size when forced cleanup is triggered
 	callback func(notification FixedBufferCleanerNotification), // (optional) callback hooks any forced cleanups
 ) Cleaner {
 	return func(size int, offsets []int) int {

@@ -57,10 +57,6 @@ func (n *Notifier) SubscribeContext(ctx context.Context, key interface{}, target
 	subscriber.ctx = ctx
 	subscriber.target = value
 
-	if ctx != nil && ctx.Err() != nil {
-		return
-	}
-
 	keySubscribers[valuePtr] = subscriber
 	subscribers[key] = keySubscribers
 	n.subscribers = subscribers

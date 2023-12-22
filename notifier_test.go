@@ -182,7 +182,7 @@ func TestNotifier_PublishContext_cancelGuarded(t *testing.T) {
 	nf.PublishContext(ctx, key, errors.New(`some_error`))
 }
 
-func TestNotifier_SubscribeContext_cancelGuarded(t *testing.T) {
+func TestNotifier_SubscribeContext_premptivelyCanceled(t *testing.T) {
 	var (
 		nf          = new(Notifier)
 		key         = 1
@@ -192,11 +192,20 @@ func TestNotifier_SubscribeContext_cancelGuarded(t *testing.T) {
 	cancel()
 
 	nf.SubscribeContext(ctx, key, target)
-	if len(nf.subscribers) != 0 {
+	if len(nf.subscribers) != 1 {
 		t.Fatal(nf.subscribers)
+	}
+	if len(nf.subscribers[key]) != 1 {
+		t.Fatal(nf.subscribers[key])
 	}
 
 	nf.Publish(key, errors.New(`some_error`))
+
+	nf.Unsubscribe(key, target)
+
+	if len(nf.subscribers) != 0 {
+		t.Fatal(nf.subscribers)
+	}
 }
 
 func TestNotifier_SubscribeContext_exists(t *testing.T) {

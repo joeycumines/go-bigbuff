@@ -359,7 +359,7 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 					),
 					cancels...,
 				)...,
-			),      // combined context is used (all components, base on input though)
+			), // combined context is used (all components, base on input though)
 			b.cond, // wait on the buffer's cond
 			func() bool {
 				// initial check - can we get the state?
