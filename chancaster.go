@@ -25,10 +25,12 @@ type ChanCaster[C chan V, V any] struct {
 	mutex sync.RWMutex
 	// state synchronises the number of receivers, between [ChanCaster.Send]
 	// calls, and [ChanCaster.Add] calls with negative deltas.
-	// The high 32 bits are number of receivers (modelled as int32), while the
+	// The high 32 bits are number of receivers (modeled as int32), while the
 	// low 32 bits are either identical, or [math.MaxInt32] + the number of
-	// receivers being sent to (at the start of [ChanCaster.Send]), that
-	// haven't been removed, via [ChanCaster.Add] with a negative delta.
+	// receivers being (the value of the high 32 bits), if sending is in
+	// progress. Using an atomic value for synchronisation requires having the
+	// "is sending" information embedded in said value, and having two copies
+	// of the number of receivers makes invariant and overflow checks easier.
 	state atomic.Uint64
 }
 
@@ -152,16 +154,15 @@ func (x *ChanCaster[C, V]) Add(delta int) {
 
 		// validate, and, if necessary, receive any channel sends that would
 		// otherwise never be received (to avoid Send hanging)
-		if receivers <= maxReceivers {
+		if receivers <= maxReceivers && maxReceivers-receivers >= uint32(delta) {
 			switch tracker {
 			case receivers:
 				return // not sending
 
 			case maxReceivers + receivers:
-				// sending - perform the requisite number of receives (however
-				// many we decremented, or, at most, however many are
-				// remaining, from those being sent)
-				for range min(delta, int(tracker-maxReceivers)) {
+				// sending - perform the requisite number of receives
+				// note: receivers = tracker-maxReceivers (per the above)
+				for range delta {
 					<-x.C
 				}
 				return

@@ -340,3 +340,106 @@ func testChanCasterSendWaitForNextFullCycle(numReceivers int, send func(started,
 
 	return
 }
+
+func TestChanCaster_Add_success(t *testing.T) {
+	c := NewChanCaster(make(chan int))
+
+	assertState := func(hi, lo uint32) {
+		t.Helper()
+		expected := strconv.FormatUint(uint64(lo), 2)
+		if len(expected) < 32 {
+			expected = fmt.Sprintf("%0[2]*[1]s", expected, 32)
+		}
+		expected = strconv.FormatUint(uint64(hi), 2) + expected
+		if len(expected) < 64 {
+			expected = fmt.Sprintf("%0[2]*[1]s", expected, 64)
+		}
+		actual := strconv.FormatUint(c.state.Load(), 2)
+		if len(actual) < 64 {
+			actual = fmt.Sprintf("%0[2]*[1]s", actual, 64)
+		}
+		if expected != actual {
+			t.Errorf(`expected state: %s, got: %s`, expected, actual)
+		}
+	}
+
+	assertState(0, 0)
+
+	c.Add(math.MaxInt32)
+	assertState(math.MaxInt32, math.MaxInt32)
+
+	c.Add(-math.MaxInt32)
+	assertState(0, 0)
+
+	c.Add(math.MaxInt32 - 1)
+	assertState(math.MaxInt32-1, math.MaxInt32-1)
+
+	c.Add(1)
+	assertState(math.MaxInt32, math.MaxInt32)
+
+	c.Add(1 - math.MaxInt32)
+	assertState(1, 1)
+
+	c.Add(2)
+	assertState(3, 3)
+
+	c.Add(-1)
+	assertState(2, 2)
+
+	c.Add(-1)
+	assertState(1, 1)
+
+	c.Add(-1)
+	assertState(0, 0)
+
+	c.state.Store(5<<32 | (math.MaxInt32 + 5))
+	assertState(5, math.MaxInt32+5)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		c.Add(-2)
+		wg.Done()
+	}()
+	c.C <- 0
+	c.C <- 0
+	wg.Wait()
+	assertState(3, math.MaxInt32+3)
+
+	wg.Add(1)
+	go func() {
+		c.Add(-3)
+		wg.Done()
+	}()
+	c.C <- 0
+	c.C <- 0
+	c.C <- 0
+	wg.Wait()
+	assertState(0, math.MaxInt32+0)
+
+	c.state.Store(math.MaxInt32<<32 | (math.MaxInt32 * 2))
+	assertState(math.MaxInt32, math.MaxInt32*2)
+
+	c.Add(0)
+	assertState(math.MaxInt32, math.MaxInt32*2)
+
+	wg.Add(1)
+	go func() {
+		c.Add(-1)
+		wg.Done()
+	}()
+	c.C <- 0
+	wg.Wait()
+	assertState(math.MaxInt32-1, math.MaxInt32*2-1)
+
+	wg.Add(1)
+	go func() {
+		c.Add(-299)
+		wg.Done()
+	}()
+	for range 299 {
+		c.C <- 0
+	}
+	wg.Wait()
+	assertState(math.MaxInt32-300, math.MaxInt32*2-300)
+}
