@@ -41,13 +41,18 @@ func NewChanCaster[C chan V, V any](channel C) *ChanCaster[C, V] {
 }
 
 // Send broadcasts a message, to all registered receivers, via
-// [ChanCaster.C]. If the contract of [ChanCaster] is obeyed, this call will
-// never block for any significant time.
+// [ChanCaster.C], then returns the number of sends performed, less any
+// removed mid-flight by [ChanCaster.Add].
+//
+// If the contract of [ChanCaster] is obeyed, this call will never block for
+// any significant time. This function may panic if state invariants have been
+// violated, e.g. by misuse of [ChanCaster.Add], or if unregistered receives
+// occur, [ChanCaster.Add] was called concurrently, with a negative delta.
 //
 // See [ChanCaster.Add] for usage details.
-func (x *ChanCaster[C, V]) Send(value V) {
+func (x *ChanCaster[C, V]) Send(value V) int {
 	if x.state.Load() == 0 {
-		return // no receivers (fast path)
+		return 0 // no receivers (fast path)
 	}
 
 	// prevent receivers being added while sending + order values by send call
@@ -56,30 +61,27 @@ func (x *ChanCaster[C, V]) Send(value V) {
 
 	// load our state, guard no receivers (early exit), and set tracker to the
 	// value of `maxInt32 + receivers`, using CAS to sync with negative adds
-	var receivers uint32
-	{
-		var (
-			state   uint64
-			tracker uint32
-		)
-		for {
-			state = x.state.Load()
-			if state == 0 {
-				return // no receivers (slow path)
-			}
+	var (
+		state              uint64
+		receivers, tracker uint32
+	)
+	for {
+		state = x.state.Load()
+		if state == 0 {
+			return 0 // no receivers (slow path)
+		}
 
-			receivers = uint32(state >> 32) // initialize from hi
-			tracker = uint32(state)         // initialize from lo
-			if tracker != receivers || receivers > math.MaxInt32 {
-				panic(`bigbuff: chancaster: send: state invariant violation`)
-			}
+		receivers = uint32(state >> 32) // initialize from hi
+		tracker = uint32(state)         // initialize from lo
+		if tracker != receivers || receivers > math.MaxInt32 {
+			panic(`bigbuff: chancaster: send: state invariant violation`)
+		}
 
-			// attempt to set tracker to `maxInt32 + receivers`, with CAS used
-			// to synchronise with decrements of receivers
-			tracker += math.MaxInt32
-			if x.state.CompareAndSwap(state, uint64(receivers)<<32+uint64(tracker)) {
-				break
-			}
+		// attempt to set tracker to `maxInt32 + receivers`, with CAS used to
+		// synchronise with decrements of receivers
+		tracker += math.MaxInt32
+		if x.state.CompareAndSwap(state, uint64(receivers)<<32|uint64(tracker)) {
+			break
 		}
 	}
 
@@ -89,11 +91,24 @@ func (x *ChanCaster[C, V]) Send(value V) {
 		x.C <- value // may end up received by negative Add calls
 	}
 
-	// reset state - easy, as we just broadcast, and no increments occurred
-	x.state.Store(0)
+	// now, we can retrieve, validate, then reset the state (to 0 - all broadcast + we locked so none added)
+	// note: it should be stable - if it isn't, invariants were violated
+	state = x.state.Load()
+	tracker = uint32(state >> 32) // actually the final receivers (used as scratch)
+	if tracker > receivers ||     // receivers should be unchanged or decreased (and also lower than math.MaxInt32)
+		uint32(state) != tracker+math.MaxInt32 || // lo still exactly math.MaxInt32 more than hi
+		!x.state.CompareAndSwap(state, 0) { // failing this indicates one or more unregistered receivers
+		panic(`bigbuff: chancaster: send: state invariant violation`)
+	}
+
+	// returns number of sends less any received by negative Add calls
+	return int(tracker)
 }
 
-// Add increments or decrements the number of receivers, for [ChanCaster.C].
+// Add increments or decrements the number of receivers, for [ChanCaster.C],
+// then returns the number of receivers, after the operation. Calling with a
+// delta of 0 is allowed, and will load and validate then return the number
+// of receivers, without changing it.
 //
 // Each added receiver represents the intent to receive exactly one value, from
 // [ChanCaster.C]. Each receiver removed (via a negative delta) represents
@@ -102,41 +117,43 @@ func (x *ChanCaster[C, V]) Send(value V) {
 // [0, math.MaxInt32], and any add which results in a number of receivers
 // outside this range will cause a panic.
 //
-// The typical usage pattern is to call [ChanCaster.Add] with a delta of `1`,
+// The typical usage pattern is to call [ChanCaster.Add] with a delta of 1,
 // then immediately receive, or attempt to receive, e.g. within a `select`
 // statement. If the next-received value (e.g. within said `select` statement)
 // is not from [ChanCaster.C], and receive won't be promptly re-attempted, then
 // [ChanCaster.Add] should be called again, with the inverse of the previous
 // delta.
 //
-// Using a delta greater than `1` indicates multiple separate receivers, which
+// Using a delta greater than 1 indicates multiple separate receivers, which
 // will all receive the same value, from the same [ChanCaster.Send] call. These
 // receivers should independently decrement the number of receivers, if
 // necessary, as described above.
-func (x *ChanCaster[C, V]) Add(delta int) {
+func (x *ChanCaster[C, V]) Add(delta int) int {
 	const maxReceivers = math.MaxInt32
 
 	switch {
-	case delta == 0:
-		return
-
-	case delta > 0:
-		if delta > maxReceivers {
+	case delta >= 0:
+		var state uint64
+		if delta == 0 {
+			state = x.state.Load() // no change
+		} else if delta > maxReceivers {
 			panic(`bigbuff: chancaster: add: positive delta out of bounds`)
+		} else {
+			// increasing num receivers not allowed concurrently with sending
+			x.mutex.RLock()
+			defer x.mutex.RUnlock()
+
+			// add delta to both hi and lo
+			state = x.state.Add(uint64(delta)<<32 | uint64(uint32(delta)))
 		}
 
-		// inc needs read lock to be mutually exclusive with sends
-		x.mutex.RLock()
-		defer x.mutex.RUnlock()
-
-		// add delta to both hi and lo
-		state := x.state.Add(uint64(delta)<<32 + uint64(uint32(delta)))
-
 		// validate to ensure we did not overflow + sanity check invariants
-		if receivers := uint32(state >> 32); receivers <= maxReceivers &&
+		// note: if this was an add (and we acquired the lock), the lo value
+		// should never be the +maxReceivers case
+		if receivers, tracker := uint32(state>>32), uint32(state); receivers <= maxReceivers &&
 			receivers >= uint32(delta) &&
-			receivers == uint32(state) {
-			return
+			(receivers == tracker || (delta == 0 && receivers+maxReceivers == tracker)) {
+			return int(receivers)
 		}
 
 	case delta < -maxReceivers:
@@ -147,17 +164,16 @@ func (x *ChanCaster[C, V]) Add(delta int) {
 		delta = -delta
 
 		// note: same delta calc as above, subtracted using two's complement rules
-		state := x.state.Add(^(uint64(delta)<<32 + uint64(uint32(delta)) - 1))
-
-		receivers := uint32(state >> 32) // initialize from hi
-		tracker := uint32(state)         // initialize from lo
+		state := x.state.Add(^(uint64(delta)<<32 | uint64(uint32(delta)) - 1))
 
 		// validate, and, if necessary, receive any channel sends that would
 		// otherwise never be received (to avoid Send hanging)
-		if receivers <= maxReceivers && maxReceivers-receivers >= uint32(delta) {
-			switch tracker {
+		if receivers := uint32(state >> 32); receivers <= maxReceivers &&
+			maxReceivers-receivers >= uint32(delta) {
+			switch uint32(state) { // lo
 			case receivers:
-				return // not sending
+				// not sending
+				return int(receivers) // note: already subtracted delta
 
 			case maxReceivers + receivers:
 				// sending - perform the requisite number of receives
@@ -165,7 +181,7 @@ func (x *ChanCaster[C, V]) Add(delta int) {
 				for range delta {
 					<-x.C
 				}
-				return
+				return int(receivers) // note: already subtracted delta
 			}
 		}
 	}

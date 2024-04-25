@@ -1,14 +1,20 @@
 package bigbuff
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
+	"math/big"
+	"math/rand/v2"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // This example demonstrates how two channels and the [ChanCaster]
@@ -147,6 +153,10 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 		return fmt.Sprintf(`receivers: %d, remaining: %d, state: %s|%s`, receivers, remaining, s[:32], s[32:])
 	}
 
+	send := func(v int) {
+		fmt.Printf("sent value %d was received by non-decrement %d times\n", v, b.Send(v))
+	}
+
 	// without cancels, simple usage (not real usage pattern)
 
 	for range 3 {
@@ -160,12 +170,12 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 			fmt.Println(`received:`, <-b.C)
 		}
 	}()
-	b.Send(1)
+	send(1)
 	wg.Wait()
 	fmt.Println(`state after send:`, stateStr())
 
 	// note: this does nothing
-	b.Send(213)
+	send(213)
 
 	wg.Add(1)
 	go func() {
@@ -177,7 +187,7 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	for range 3 {
 		b.Add(1)
 	}
-	b.Send(2)
+	send(2)
 	wg.Wait()
 
 	wg.Wait()
@@ -197,7 +207,7 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 		fmt.Println(`received:`, <-b.C)
 	}()
 
-	b.Send(3)
+	send(3)
 
 	wg.Wait()
 
@@ -208,13 +218,17 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	//received: 1
 	//received: 1
 	//received: 1
+	//sent value 1 was received by non-decrement 3 times
 	//state after send: receivers: 0, remaining: -2147483647, state: 00000000000000000000000000000000|00000000000000000000000000000000
+	//sent value 213 was received by non-decrement 0 times
 	//received: 2
 	//received: 2
 	//received: 2
+	//sent value 2 was received by non-decrement 3 times
 	//received: 3
 	//state after canceling mid send: receivers: 2, remaining: 2, state: 00000000000000000000000000000010|10000000000000000000000000000001
 	//received: 3
+	//sent value 3 was received by non-decrement 2 times
 	//final num receivers: receivers: 0, remaining: -2147483647, state: 00000000000000000000000000000000|00000000000000000000000000000000
 }
 
@@ -363,42 +377,54 @@ func TestChanCaster_Add_success(t *testing.T) {
 		}
 	}
 
+	assertAdd := func(delta int, expected int) {
+		t.Helper()
+		if actual := c.Add(delta); actual != expected {
+			t.Errorf(`expected %d, got %d`, expected, actual)
+		}
+	}
+
 	assertState(0, 0)
 
-	c.Add(math.MaxInt32)
+	assertAdd(0, 0)
+	assertState(0, 0)
+
+	assertAdd(math.MaxInt32, math.MaxInt32)
 	assertState(math.MaxInt32, math.MaxInt32)
 
-	c.Add(-math.MaxInt32)
+	assertAdd(-math.MaxInt32, 0)
 	assertState(0, 0)
 
-	c.Add(math.MaxInt32 - 1)
+	assertAdd(math.MaxInt32-1, math.MaxInt32-1)
 	assertState(math.MaxInt32-1, math.MaxInt32-1)
 
-	c.Add(1)
+	assertAdd(1, math.MaxInt32)
 	assertState(math.MaxInt32, math.MaxInt32)
 
-	c.Add(1 - math.MaxInt32)
+	assertAdd(1-math.MaxInt32, 1)
 	assertState(1, 1)
 
-	c.Add(2)
+	assertAdd(2, 3)
 	assertState(3, 3)
 
-	c.Add(-1)
+	assertAdd(-1, 2)
 	assertState(2, 2)
 
-	c.Add(-1)
+	assertAdd(-1, 1)
 	assertState(1, 1)
 
-	c.Add(-1)
+	assertAdd(-1, 0)
 	assertState(0, 0)
 
 	c.state.Store(5<<32 | (math.MaxInt32 + 5))
+	assertState(5, math.MaxInt32+5)
+	assertAdd(0, 5)
 	assertState(5, math.MaxInt32+5)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		c.Add(-2)
+		assertAdd(-2, 3)
 		wg.Done()
 	}()
 	c.C <- 0
@@ -408,7 +434,7 @@ func TestChanCaster_Add_success(t *testing.T) {
 
 	wg.Add(1)
 	go func() {
-		c.Add(-3)
+		assertAdd(-3, 0)
 		wg.Done()
 	}()
 	c.C <- 0
@@ -420,12 +446,12 @@ func TestChanCaster_Add_success(t *testing.T) {
 	c.state.Store(math.MaxInt32<<32 | (math.MaxInt32 * 2))
 	assertState(math.MaxInt32, math.MaxInt32*2)
 
-	c.Add(0)
+	assertAdd(0, math.MaxInt32)
 	assertState(math.MaxInt32, math.MaxInt32*2)
 
 	wg.Add(1)
 	go func() {
-		c.Add(-1)
+		assertAdd(-1, math.MaxInt32-1)
 		wg.Done()
 	}()
 	c.C <- 0
@@ -434,7 +460,7 @@ func TestChanCaster_Add_success(t *testing.T) {
 
 	wg.Add(1)
 	go func() {
-		c.Add(-299)
+		assertAdd(-299, math.MaxInt32-300)
 		wg.Done()
 	}()
 	for range 299 {
@@ -442,4 +468,357 @@ func TestChanCaster_Add_success(t *testing.T) {
 	}
 	wg.Wait()
 	assertState(math.MaxInt32-300, math.MaxInt32*2-300)
+}
+
+func FuzzChanCaster_Add(f *testing.F) {
+	add := func(hi, lo uint32, delta int) {
+		f.Add(hi, lo, delta)
+	}
+
+	add(0, 0, 0)
+	add(0, 0, 1)
+	add(0, 0, -1)
+	add(0, 0, math.MaxInt32)
+	add(0, 0, math.MaxInt32-1)
+	add(0, 0, math.MaxInt32+1)
+	add(math.MaxInt32, math.MaxInt32, 0)
+	add(math.MaxInt32, math.MaxInt32, 0)
+	add(math.MaxInt32, math.MaxInt32*2, 0)
+	add(0, math.MaxInt32, 0)
+	add(1, 0, 0)
+	add(1, math.MaxInt32, 0)
+	add(1, 1, -1)
+	add(1, 1, 1)
+	add(5, 5, 23023)
+	add(1, math.MaxInt32+1, -1)
+	add(1, math.MaxInt32+1, -2)
+	add(math.MaxInt32, math.MaxInt32*2, -10_000)
+	add(99, math.MaxInt32+99, -99)
+	add(99, math.MaxInt32+99, -100)
+	add(math.MaxInt32, math.MaxInt32, -math.MaxInt32)
+	add(math.MaxInt32, math.MaxInt32, -math.MaxInt32-1)
+	add(math.MaxUint32, math.MaxUint32, 0)
+	add(math.MaxUint32-129239, math.MaxUint32-129239, 1)
+	add(math.MaxUint32-129239, math.MaxUint32-129239, -1)
+	add(math.MaxInt32+1, math.MaxInt32*2+1, -1)
+
+	f.Fuzz(func(t *testing.T, hi, lo uint32, delta int) {
+		caster := NewChanCaster(make(chan struct{}))
+
+		storeChanCasterState(t, caster, hi, lo)
+
+		// ensure we don't try and acquire the write lock, just because
+		caster.mutex.RLock()
+		defer caster.mutex.RUnlock()
+
+		// high-level delta validity rules (also dependent on state validity):
+		deltaValid := delta >= -math.MaxInt32 && delta <= math.MaxInt32 // one more check below
+
+		var expected int64
+		{
+			v1 := new(big.Int).SetUint64(uint64(hi))
+			v2 := new(big.Int).SetInt64(int64(delta))
+			v1.Add(v1, v2)
+			if deltaValid && (v1.Sign() < 0 || v1.Cmp(v2.SetUint64(math.MaxInt32)) > 0) {
+				deltaValid = false
+			}
+			expected = v1.Int64()
+		}
+
+		// the rules for determining validity of the state (inclusive of no write lock) are simply:
+		stateValid := hi <= math.MaxInt32 && (lo == hi || (delta <= 0 && lo == hi+math.MaxInt32))
+
+		var success bool
+		if !deltaValid || !stateValid { // expect panic
+			defer func() {
+				if success {
+					t.Error(`expected panic, got success`)
+				} else if v := fmt.Sprint(recover()); !strings.HasPrefix(v, `bigbuff: chancaster: add: `) {
+					t.Errorf(`unexpected panic string prefix: %s`, v)
+				}
+			}()
+		} else if delta < -100_000 && hi != lo {
+			t.Skip(`skipping large negative delta fuzz case during send:`, hi, lo, delta)
+		} else {
+			var count int
+			stop := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					case caster.C <- struct{}{}:
+						count--
+					}
+				}
+			}()
+			defer func() {
+				close(stop)
+				wg.Wait()
+				if hi == lo {
+					if count != 0 {
+						t.Fatalf(`expected 0 receives, got %d`, count)
+					}
+				} else if count != delta {
+					t.Fatalf(`expected %d receives, got %d`, delta, count)
+				}
+			}()
+		}
+
+		receivers := caster.Add(delta)
+		success = true
+
+		if receivers < 0 || receivers > math.MaxInt32 || expected != int64(receivers) {
+			t.Fatalf(`expected valid, and equal to %d, got %d`, expected, receivers)
+		}
+
+		stateBytes := new(big.Int).SetUint64(caster.state.Load()).FillBytes(make([]byte, 8))
+		expectedBytes := make([]byte, 8)
+		new(big.Int).SetInt64(expected).FillBytes(expectedBytes[:4])
+		{
+			v := expected
+			if lo != hi {
+				v += math.MaxInt32
+			}
+			new(big.Int).SetInt64(v).FillBytes(expectedBytes[4:])
+		}
+		if !bytes.Equal(stateBytes, expectedBytes) {
+			t.Fatalf(`expected state: %v, got: %v`, expectedBytes, stateBytes)
+		}
+	})
+}
+
+func FuzzChanCaster_Send(f *testing.F) {
+	add := func(hi, lo uint32, dec uint8) {
+		f.Add(hi, lo, dec)
+	}
+
+	add(0, 0, 0)
+	add(0, 0, 1)
+	add(372, 372, 0)
+	add(math.MaxInt32, math.MaxInt32*2, 0)
+	add(0, math.MaxInt32, 0)
+	add(1, 0, 0)
+	add(1, math.MaxInt32, 0)
+	add(1, 1, 1)
+	add(5, 5, 222)
+	add(1, math.MaxInt32+1, 1)
+	add(1, math.MaxInt32+1, 2)
+	add(math.MaxInt32, math.MaxInt32*2, 200)
+	add(99, math.MaxInt32+99, 99)
+	add(99, math.MaxInt32+99, 100)
+	add(201, 201, 200)
+	add(99, 99, 99)
+	add(99, 99, 100)
+	add(math.MaxInt32, math.MaxInt32*2, math.MaxUint8)
+	add(1243, 923, 0)
+
+	f.Fuzz(func(t *testing.T, hi, lo uint32, dec uint8) {
+		timeout := time.NewTimer(time.Millisecond * 1000)
+		defer timeout.Stop()
+
+		expectedInt := rand.Int()
+		expectedValue := &expectedInt
+
+		caster := NewChanCaster(make(chan *int))
+		defer close(caster.C)
+
+		storeChanCasterState(t, caster, hi, lo)
+
+		validState := hi <= math.MaxInt32 && lo == hi
+		validDec := uint32(dec) <= hi
+		expected := int64(hi) - int64(dec)
+		if hi == 0 {
+			expected = 0
+		}
+
+		if validState && !validDec && hi == 1 {
+			t.Skip(`flappy test scenario`)
+		}
+		if validState && hi > 10_000 {
+			t.Skip(`skipping too large hi fuzz case`)
+		}
+
+		var success bool
+		if !validState || (!validDec && hi != 0) { // expect panic
+			defer func() {
+				if success {
+					t.Error(`expected panic, got success`)
+				} else if v := fmt.Sprint(recover()); !strings.HasPrefix(v, `bigbuff: chancaster: send: `) {
+					t.Errorf(`unexpected panic string prefix: %s`, v)
+				}
+			}()
+		}
+
+		var ready, wg sync.WaitGroup
+		wg.Add(1)
+		ready.Add(1)
+
+		firstPanicCh := make(chan struct{})
+		var firstPanicOnce sync.Once
+
+		if !validState || uint32(dec) == hi || hi == 0 {
+			ready.Done()
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var readied bool
+				n := expected
+				if !validDec {
+					n = int64(hi)
+				}
+				for range n {
+					select {
+					case v := <-caster.C:
+						if v != expectedValue {
+							t.Errorf(`expected %v, got %v`, expectedValue, v)
+						}
+					case <-timeout.C:
+						t.Error(`timeout`)
+						return
+					}
+					if !readied {
+						readied = true
+						ready.Done()
+						time.Sleep(time.Millisecond * 30)
+						if !validDec {
+							// wait for panic
+							select {
+							case <-firstPanicCh:
+							case <-timeout.C:
+								t.Error(`timeout waiting for panic`)
+								panic(`timeout waiting for panic`)
+							}
+						}
+					}
+				}
+			}()
+		}
+
+		if validState && hi != 0 {
+			n := dec
+			if !validDec {
+				n = 1
+			}
+
+			for range n {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					ready.Wait()
+
+					var success bool
+					if !validDec {
+						// simulate the correct number of receives
+						caster.state.Store(math.MaxInt32)
+
+						defer func() {
+							if success {
+								t.Error(`dec: expected error, got success`)
+								return
+							}
+							firstPanicOnce.Do(func() {
+								close(firstPanicCh)
+							})
+							if v := fmt.Sprint(recover()); !strings.HasPrefix(v, `bigbuff: chancaster: add: `) {
+								t.Errorf(`dec: unexpected panic string prefix: %s`, v)
+							}
+						}()
+					}
+
+					v := caster.Add(-1)
+					if v < 0 || int64(v) >= int64(hi) || v > math.MaxInt32 || (validDec && int64(v) < int64(expected)) {
+						t.Errorf(`expected ~%d, got %d`, hi-uint32(dec), v)
+					}
+					success = true
+				}()
+			}
+		}
+
+		wg.Done()
+
+		received := func() int {
+			defer func() {
+				ready.Wait()
+				wg.Wait()
+			}()
+			return caster.Send(expectedValue)
+		}()
+
+		success = true
+
+		if int64(received) != int64(expected) {
+			t.Errorf(`expected %d, got %d`, expected, received)
+		}
+
+		time.Sleep(time.Millisecond * 3)
+		select {
+		case <-caster.C:
+			t.Error(`expected no more values`)
+		default:
+		}
+		if v := caster.state.Load(); v != 0 {
+			t.Errorf(`expected state to be 0, got %d`, v)
+		}
+	})
+}
+
+func storeChanCasterState[C chan V, V any](t *testing.T, caster *ChanCaster[C, V], hi, lo uint32) {
+	h := (*[4]byte)(unsafe.Pointer(&hi))
+	l := (*[4]byte)(unsafe.Pointer(&lo))
+	// note: want big endian, might need to flip each segment
+	b := append(append(make([]byte, 0, 8), h[:]...), l[:]...)
+	buf := [2]byte{}
+	*(*uint16)(unsafe.Pointer(&buf[0])) = uint16(0xABCD)
+	switch buf {
+	case [2]byte{0xCD, 0xAB}:
+		// little endian
+		slices.Reverse(b[:4])
+		slices.Reverse(b[4:])
+	case [2]byte{0xAB, 0xCD}:
+		// big endian
+	default:
+		t.Fatal(`unexpected endianness`)
+	}
+	v := new(big.Int).SetBytes(b)
+	state := v.Uint64()
+	if v.Cmp(new(big.Int).SetUint64(state)) != 0 {
+		t.Fatal(`unexpected state conversion`)
+	}
+	// note: we could've just done this:
+	if state != uint64(hi)<<32|uint64(lo) {
+		t.Fatal(`unexpected state conversion`)
+	}
+	caster.state.Store(state)
+}
+
+func TestChanCaster_Send_multipleRacingSenders(t *testing.T) {
+	const n = 500
+	c := NewChanCaster(make(chan struct{}, n*2))
+	c.Add(1)
+	c.mutex.Lock()
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			c.Send(struct{}{})
+		}()
+	}
+	time.Sleep(time.Millisecond * 10)
+	if len(c.C) != 0 {
+		t.Error(`expected no values prior to unlock`)
+	}
+	c.mutex.Unlock()
+	wg.Wait()
+	if len(c.C) != 1 {
+		t.Error(`expected 1 value after unlock`)
+	}
+	if c.state.Load() != 0 {
+		t.Error(`expected state to be 0`)
+	}
 }
