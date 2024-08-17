@@ -11,7 +11,7 @@ import (
 //
 // See also [NewChanCaster] (optional).
 type ChanCaster[C chan V, V any] struct {
-	// Channel will be used to broadcast messages.
+	// C is the channel that will be used to broadcast messages.
 	//
 	// See [ChanCaster.Add] and [ChanCaster.Send] for usage details.
 	C C
@@ -47,7 +47,7 @@ func NewChanCaster[C chan V, V any](channel C) *ChanCaster[C, V] {
 // If the contract of [ChanCaster] is obeyed, this call will never block for
 // any significant time. This function may panic if state invariants have been
 // violated, e.g. by misuse of [ChanCaster.Add], or if unregistered receives
-// occur, [ChanCaster.Add] was called concurrently, with a negative delta.
+// are detected.
 //
 // See [ChanCaster.Add] for usage details.
 func (x *ChanCaster[C, V]) Send(value V) int {
