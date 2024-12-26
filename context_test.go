@@ -20,9 +20,284 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestConflatedContext_panicOnNoInput(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic, got none")
+		}
+	}()
+	ConflatedContext()
+}
+
+func TestConflatedContext_allCanceledInitially(t *testing.T) {
+	// Create contexts that are all canceled.
+	canceledCtx1, cancel1 := context.WithCancel(context.Background())
+	cancel1()
+	canceledCtx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+
+	ctx, _ := ConflatedContext(canceledCtx1, canceledCtx2)
+
+	select {
+	case <-ctx.Done():
+		// Expected: should already be canceled
+	default:
+		t.Errorf("ConflatedContext should have been canceled immediately, but was not")
+	}
+
+	if err := ctx.Err(); err != context.Canceled {
+		t.Errorf("expected context to be canceled, got %v", err)
+	}
+}
+
+func TestConflatedContext_oneActiveOneCanceled(t *testing.T) {
+	activeCtx, cancelActive := context.WithCancel(context.Background())
+	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled() // canceled from the start
+
+	ctx, conflatedCancel := ConflatedContext(canceledCtx, activeCtx)
+	defer conflatedCancel()
+
+	select {
+	case <-ctx.Done():
+		t.Errorf("ctx is canceled prematurely while activeCtx is still active")
+	default:
+		// Good: ctx should still be alive
+	}
+
+	// Now cancel the active one
+	cancelActive()
+
+	// Once the active one is canceled, the conflated ctx should follow
+	select {
+	case <-ctx.Done():
+		// Expected
+	case <-time.After(50 * time.Millisecond):
+		t.Errorf("ctx did not cancel after the last active context was canceled")
+	}
+}
+
+func TestConflatedContext_remainsActiveIfOneStaysActive(t *testing.T) {
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	ctx3, cancel3 := context.WithCancel(context.Background())
+
+	conCtx, conCancel := ConflatedContext(ctx1, ctx2, ctx3)
+	defer conCancel()
+
+	// Cancel ctx1
+	cancel1()
+	select {
+	case <-conCtx.Done():
+		t.Errorf("conCtx should remain active because ctx3 and ctx2 are still active")
+	default:
+		// Good
+	}
+
+	// Cancel ctx3
+	cancel3()
+	select {
+	case <-conCtx.Done():
+		t.Errorf("conCtx should remain active because ctx2 is still active")
+	default:
+		// Good
+	}
+
+	// Finally, cancel ctx2
+	cancel2()
+	select {
+	case <-conCtx.Done():
+		// Expected now, since all have been canceled
+	case <-time.After(50 * time.Millisecond):
+		t.Errorf("conCtx did not cancel after all input contexts were canceled")
+	}
+}
+
+func TestConflatedContext_usesFirstContextValues(t *testing.T) {
+	type key string
+	const testKey key = "testKey"
+
+	// The first context has a value.
+	baseCtx := context.WithValue(context.Background(), testKey, "foo")
+
+	// Additional contexts:
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	// Create a conflated context.
+	conCtx, conCancel := ConflatedContext(baseCtx, ctx2)
+	defer conCancel()
+
+	// Should be able to retrieve the value from baseCtx
+	if val := conCtx.Value(testKey); val != "foo" {
+		t.Errorf("expected conflated context to inherit value 'foo'; got %v", val)
+	}
+}
+
+func TestConflatedContext_explicitCancel(t *testing.T) {
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	conCtx, conCancel := ConflatedContext(ctx1, ctx2)
+	defer conCancel()
+
+	// Explicitly cancel the conflated context
+	conCancel()
+
+	// Even though neither ctx1 nor ctx2 is canceled, conCtx should now be done
+	select {
+	case <-conCtx.Done():
+		// Expected
+	case <-time.After(50 * time.Millisecond):
+		t.Errorf("conCtx not canceled after an explicit cancel call")
+	}
+}
+
+func TestConflatedContext_partialTimeoutCancel(t *testing.T) {
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel1()
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	conCtx, conCancel := ConflatedContext(ctx1, ctx2)
+	defer conCancel()
+
+	// Wait until ctx1 times out
+	<-time.After(60 * time.Millisecond)
+
+	// At this point, ctx1 is canceled due to timeout, but ctx2 remains active
+	if err := conCtx.Err(); err != nil {
+		t.Errorf("conCtx should not be canceled yet. Got error: %v", err)
+	}
+
+	// Now cancel ctx2
+	cancel2()
+
+	select {
+	case <-conCtx.Done():
+		// Expected since all contexts are done
+	case <-time.After(50 * time.Millisecond):
+		t.Errorf("conCtx did not cancel after all underlying contexts canceled")
+	}
+}
+
+func TestChainAfterFunc_callsFuncOnOtherCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	other, otherCancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	called := make(chan struct{})
+	f := func() { close(called) }
+
+	ChainAfterFunc(ctx, other, f)
+	otherCancel()
+
+	select {
+	case <-time.After(time.Second * 3):
+		t.Error("expected f to be called on other cancel")
+	case <-called:
+	}
+}
+
+func TestChainAfterFunc_callsFuncOnCtxCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	other, otherCancel := context.WithCancel(context.Background())
+	defer otherCancel()
+
+	called := make(chan struct{})
+	f := func() { close(called) }
+
+	ChainAfterFunc(ctx, other, f)
+	cancel()
+
+	select {
+	case <-time.After(time.Second * 3):
+		t.Error("expected f to be called on ctx cancel")
+	case <-called:
+	}
+}
+
+func TestChainAfterFunc_doesNotCallFuncIfAlreadyCalled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	other, otherCancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		callCount int32
+		once      sync.Once
+		done      = make(chan struct{})
+	)
+	f := func() {
+		atomic.AddInt32(&callCount, 1)
+		once.Do(func() {
+			close(done)
+		})
+	}
+
+	ChainAfterFunc(ctx, other, f)
+	otherCancel()
+	cancel()
+
+	time.Sleep(time.Millisecond * 50)
+
+	select {
+	case <-time.After(time.Second * 3):
+		t.Error("expected f to be called on either ctx cancel")
+	case <-done:
+	}
+
+	if v := atomic.LoadInt32(&callCount); v != 1 {
+		t.Errorf("expected f to be called once, but was called %d times", v)
+	}
+}
+
+func TestChainAfterFunc_otherAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	other, otherCancel := context.WithCancel(context.Background())
+	defer otherCancel()
+
+	var (
+		callCount int32
+		once      sync.Once
+		done      = make(chan struct{})
+	)
+	f := func() {
+		atomic.AddInt32(&callCount, 1)
+		once.Do(func() {
+			close(done)
+		})
+	}
+
+	otherCancel()
+
+	ChainAfterFunc(ctx, other, f)
+
+	select {
+	case <-time.After(time.Second * 3):
+		t.Error("expected f to be called on either ctx cancel")
+	case <-done:
+	}
+
+	cancel()
+
+	time.Sleep(time.Millisecond * 30)
+
+	if v := atomic.LoadInt32(&callCount); v != 1 {
+		t.Errorf("expected f to be called once, but was called %d times", v)
+	}
+}
 
 func TestCombineContext_each(t *testing.T) {
 	initialGoroutineCount := runtime.NumGoroutine()
