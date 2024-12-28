@@ -822,3 +822,47 @@ func TestChanCaster_Send_multipleRacingSenders(t *testing.T) {
 		t.Error(`expected state to be 0`)
 	}
 }
+
+var bmrInt int
+
+func BenchmarkChanCaster_highContention(b *testing.B) {
+	const numReceivers = 100_000
+
+	c := NewChanCaster(make(chan struct{}))
+
+	stop := make(chan struct{})
+
+	var allStopped sync.WaitGroup
+	allStopped.Add(numReceivers)
+
+	var ready sync.WaitGroup
+
+	for i := 0; i < numReceivers; i++ {
+		go func() {
+			defer allStopped.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-c.C:
+				}
+				ready.Done()
+			}
+		}()
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.Add(numReceivers)
+		ready.Add(numReceivers)
+		bmrInt = c.Send(struct{}{})
+		if bmrInt != numReceivers {
+			b.Fatalf(`expected %d, got %d`, numReceivers, bmrInt)
+		}
+		ready.Wait()
+	}
+	b.StopTimer()
+
+	close(stop)
+	allStopped.Wait()
+}

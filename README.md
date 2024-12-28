@@ -15,11 +15,16 @@ different. A good rule of thumb is to keep them peripheral and replaceable, wher
 
 ## Highlights
 
+- `bigbuff.ChanCaster` a high-performance, low-level, single-channel broadcast mechanism
+- `bigbuff.ChanPubSub` a high-performance, scalable, flexible, in-memory pub-sub, with notably low memory footprint
 - `bigbuff.Buffer` is the most mature implementation in this package, and is battle tested one-many producer / consumer
    implementation. It operates as an unbounded FIFO queue by default, reaping messages after they are read by all (and
    at least one) consumer. Custom behavior may be implemented using the `bigbuff.Cleaner` type. The buffer's behavior
    may be modified to enforce (soft) bounding of the size of the queue, via the `bigbuff.FixedBufferCleaner` function.
    Benchmarks... someday.
+   **PLEASE NOTE: Please carefully consider if you _actually_ need an unbounded buffer.** I remain confident that my use
+   cases are valid, but have since concluded that flow control patterns should be strongly considered. Even if those
+   patterns are in addition to the use of an unbounded buffer.
 - Any readable channel may be used as a `bigbuff.Consumer`, using `bigbuff.NewChannel`
 - `bigbuff.Notifier` uses `reflect.Select` to provide synchronous fan-out pub-sub (keyed, sending to any supported
   channel that is subscribed at time of publish). This implementation is far more compact than `bigbuff.Buffer`, but
