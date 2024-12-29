@@ -23,7 +23,7 @@ import (
 )
 
 // Subscribe is equivalent of SubscribeContext(nil, key, target)
-func (n *Notifier) Subscribe(key interface{}, target interface{}) {
+func (n *Notifier) Subscribe(key any, target any) {
 	n.SubscribeContext(nil, key, target)
 }
 
@@ -32,7 +32,7 @@ func (n *Notifier) Subscribe(key interface{}, target interface{}) {
 // provided), be sure to unsubscribe exactly once to free references to ctx and target. A panic will occur if target is
 // not a channel to which the notifier can send, or if there already exists a subscription for the given key and target
 // combination. The key may be any comparable value.
-func (n *Notifier) SubscribeContext(ctx context.Context, key interface{}, target interface{}) {
+func (n *Notifier) SubscribeContext(ctx context.Context, key any, target any) {
 	var (
 		value    = valueOfNotifierTarget(target)
 		valuePtr = value.Pointer()
@@ -43,7 +43,7 @@ func (n *Notifier) SubscribeContext(ctx context.Context, key interface{}, target
 
 	subscribers := n.subscribers
 	if subscribers == nil {
-		subscribers = make(map[interface{}]map[uintptr]notifierSubscriber)
+		subscribers = make(map[any]map[uintptr]notifierSubscriber)
 	}
 	keySubscribers, _ := subscribers[key]
 	if keySubscribers == nil {
@@ -66,7 +66,7 @@ func (n *Notifier) SubscribeContext(ctx context.Context, key interface{}, target
 // statements using the result as a one-liner, and is the most fool-proof way to implement a subscriber, at the cost
 // of less direct management of resources (including some which are potentially unnecessary, as it uses a sub-context
 // and the returned cancel obeys the contract of context.CancelFunc and does not perform Unsubscribe inline)
-func (n *Notifier) SubscribeCancel(ctx context.Context, key interface{}, target interface{}) context.CancelFunc {
+func (n *Notifier) SubscribeCancel(ctx context.Context, key any, target any) context.CancelFunc {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -93,7 +93,7 @@ func (n *Notifier) SubscribeCancel(ctx context.Context, key interface{}, target 
 // after each subscription (for the combination of key and target), preventing further messages from being published
 // to the target, and allowing freeing of associated resources WARNING subscribe context should always be canceled
 // before calling this, or it may deadlock (especially under load)
-func (n *Notifier) Unsubscribe(key interface{}, target interface{}) {
+func (n *Notifier) Unsubscribe(key any, target any) {
 	var (
 		value    = valueOfNotifierTarget(target)
 		valuePtr = value.Pointer()
@@ -121,26 +121,23 @@ func (n *Notifier) Unsubscribe(key interface{}, target interface{}) {
 }
 
 // Publish is equivalent of PublishContext(nil, key, value)
-func (n *Notifier) Publish(key interface{}, value interface{}) {
+func (n *Notifier) Publish(key any, value any) {
 	n.PublishContext(nil, key, value)
 }
 
 // PublishContext will send value to the targets of all active subscribers for a given key for which value is
 // assignable, blocking until ctx is canceled (if non-nil), or each relevant subscriber is either sent value or
 // cancels it's context
-func (n *Notifier) PublishContext(ctx context.Context, key interface{}, value interface{}) {
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
-
+func (n *Notifier) PublishContext(ctx context.Context, key any, value any) {
 	if ctx != nil && ctx.Err() != nil {
 		return
 	}
 
-	if n.subscribers == nil {
-		return
-	}
-	keySubscribers, _ := n.subscribers[key]
-	if keySubscribers == nil {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+
+	keySubscribers := n.subscribers[key]
+	if len(keySubscribers) == 0 {
 		return
 	}
 
@@ -218,7 +215,7 @@ func (n *Notifier) PublishContext(ctx context.Context, key interface{}, value in
 	}
 }
 
-func valueOfNotifierTarget(target interface{}) reflect.Value {
+func valueOfNotifierTarget(target any) reflect.Value {
 	value := reflect.ValueOf(target)
 	if kind := value.Kind(); kind != reflect.Chan {
 		panic(fmt.Errorf(`bigbuff.Notifier invalid target kind: %s`, kind.String()))
