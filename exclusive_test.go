@@ -19,6 +19,7 @@ package bigbuff
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 )
 
 func TestExclusive_Call_sequential(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	e := new(Exclusive)
 
 	for x := 0; x < 5; x++ {
@@ -41,13 +44,27 @@ func TestExclusive_Call_sequential(t *testing.T) {
 			t.Fatal(v, err)
 		}
 
-		if len(e.work) != 0 || e.work == nil {
-			t.Fatal(e.work)
+		var failed bool
+		var s string
+		for range 5 {
+			e.mutex.Lock()
+			failed = len(e.work) != 0 || e.work == nil
+			s = fmt.Sprint(e.work)
+			e.mutex.Unlock()
+			if !failed {
+				break
+			}
+			time.Sleep(time.Millisecond * 10)
+		}
+		if failed {
+			t.Fatal(s)
 		}
 	}
 }
 
 func TestExclusive_Call_blocking(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		e  = new(Exclusive)
 		in = make(chan struct {
@@ -84,14 +101,18 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	default:
 	}
 
-	if len(e.work) != 1 {
-		t.Fatal(e.work)
-	}
-	if i := e.work[22]; i == nil || i.work != nil || !i.running || i.count != 0 || i.complete || i.mutex == nil || i.cond == nil {
-		t.Fatal(i)
-	} else {
-		i1 = i
-	}
+	func() {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		if len(e.work) != 1 {
+			t.Fatal(e.work)
+		}
+		if i := e.work[22]; i == nil || i.work != nil || !i.running || i.count != 0 || i.complete || i.mutex == nil || i.cond == nil {
+			t.Fatal(i)
+		} else {
+			i1 = i
+		}
+	}()
 
 	v, err := e.Call(
 		"a",
@@ -135,12 +156,16 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	default:
 	}
 
-	if len(e.work) != 1 {
-		t.Fatal(e.work)
-	}
-	if i := e.work[22]; i == nil || i.work == nil || !i.running || i.count != 3 || i.complete || i.mutex == nil || i.cond == nil {
-		t.Fatal(i)
-	}
+	func() {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		if len(e.work) != 1 {
+			t.Fatal(e.work)
+		}
+		if i := e.work[22]; i == nil || i.work == nil || !i.running || i.count != 3 || i.complete || i.mutex == nil || i.cond == nil {
+			t.Fatal(i)
+		}
+	}()
 
 	in <- struct {
 		V interface{}
@@ -170,14 +195,18 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	default:
 	}
 
-	if len(e.work) != 1 {
-		t.Fatal(e.work)
-	}
-	if i := e.work[22]; i == nil || i.work == nil || !i.running || i.count != 1 || i.complete || i.mutex == nil || i.cond == nil {
-		t.Fatal(i)
-	} else {
-		i2 = i
-	}
+	func() {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		if len(e.work) != 1 {
+			t.Fatal(e.work)
+		}
+		if i := e.work[22]; i == nil || i.work == nil || !i.running || i.count != 1 || i.complete || i.mutex == nil || i.cond == nil {
+			t.Fatal(i)
+		} else {
+			i2 = i
+		}
+	}()
 
 	in <- struct {
 		V interface{}
@@ -205,14 +234,18 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	default:
 	}
 
-	if len(e.work) != 1 {
-		t.Fatal(e.work)
-	}
-	if i := e.work[22]; i == nil || i.work != nil || !i.running || i.count != 0 || i.complete || i.mutex == nil || i.cond == nil {
-		t.Fatal(i)
-	} else {
-		i3 = i
-	}
+	func() {
+		e.mutex.Lock()
+		defer e.mutex.Unlock()
+		if len(e.work) != 1 {
+			t.Fatal(e.work)
+		}
+		if i := e.work[22]; i == nil || i.work != nil || !i.running || i.count != 0 || i.complete || i.mutex == nil || i.cond == nil {
+			t.Fatal(i)
+		} else {
+			i3 = i
+		}
+	}()
 
 	in <- struct {
 		V interface{}
@@ -253,6 +286,8 @@ func TestExclusive_Call_blocking(t *testing.T) {
 }
 
 func TestExclusive_Call_concurrent(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	type Output struct {
 		Key    int
 		Start  int64
@@ -356,6 +391,8 @@ func TestExclusive_Call_concurrent(t *testing.T) {
 }
 
 func TestExclusive_Call_nilReceiver(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if recover() == nil {
 			t.Error("expected panic")
@@ -369,6 +406,8 @@ func TestExclusive_Call_nilReceiver(t *testing.T) {
 }
 
 func TestExclusive_Call_nilValue(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if recover() == nil {
 			t.Error("expected panic")
@@ -380,6 +419,8 @@ func TestExclusive_Call_nilValue(t *testing.T) {
 }
 
 func TestExclusive_CallAfter(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	type Output struct {
 		Key    int
 		Start  int64
@@ -477,6 +518,8 @@ func TestExclusive_CallAfter(t *testing.T) {
 }
 
 func TestExclusive_CallAfter_adjustedWait(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		e Exclusive
 		c int
@@ -513,6 +556,8 @@ func TestExclusive_CallAfter_adjustedWait(t *testing.T) {
 }
 
 func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		e Exclusive
 		c int
@@ -549,6 +594,8 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 }
 
 func TestCallAsync(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	for x := 0; x < 10; x++ {
 		var (
 			exclusive   Exclusive
@@ -594,6 +641,8 @@ func TestCallAsync(t *testing.T) {
 }
 
 func TestExclusive_Start(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		mutex   sync.Mutex
 		counter int
@@ -621,6 +670,7 @@ func TestExclusive_Start(t *testing.T) {
 	}
 	wg.Wait()
 	time.Sleep(time.Millisecond * 300)
+	mutex.Lock()
 	if counter != final {
 		t.Fatal(counter, final)
 	}
@@ -630,6 +680,8 @@ func TestExclusive_Start(t *testing.T) {
 }
 
 func TestExclusive_StartAfter(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		mutex   sync.Mutex
 		counter int
@@ -784,6 +836,8 @@ func BenchmarkExclusive_outcomeContention(b *testing.B) {
 }
 
 func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		x     Exclusive
 		calls int32
@@ -800,6 +854,8 @@ func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
 }
 
 func TestExclusive_CallWithOptions_resolveNotCalled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	v := <-new(Exclusive).CallWithOptions(ExclusiveWork(func(resolve func(result interface{}, err error)) {}))
 	if v.Error != errResolveNotCalled || v.Result != nil {
 		t.Error(v)
@@ -807,6 +863,8 @@ func TestExclusive_CallWithOptions_resolveNotCalled(t *testing.T) {
 }
 
 func TestExclusiveRateLimit(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	const (
 		num  = 100
 		wait = time.Millisecond * 500

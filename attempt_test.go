@@ -26,6 +26,8 @@ import (
 )
 
 func TestLinearAttempt_panicCount(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if v := fmt.Sprint(recover()); v != "bigbuff.LinearAttempt invalid input" {
 			t.Error(v)
@@ -35,6 +37,8 @@ func TestLinearAttempt_panicCount(t *testing.T) {
 }
 
 func TestLinearAttempt_single(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		start := runtime.NumGoroutine()
 		return func() {
@@ -55,6 +59,8 @@ func TestLinearAttempt_single(t *testing.T) {
 }
 
 func TestLinearAttempt_closed(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		start := runtime.NumGoroutine()
 		return func() {
@@ -74,6 +80,8 @@ func TestLinearAttempt_closed(t *testing.T) {
 }
 
 func TestLinearAttempt_immediateReceiveCloseAfter(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		start := runtime.NumGoroutine()
 		return func() {
@@ -110,6 +118,8 @@ func TestLinearAttempt_immediateReceiveCloseAfter(t *testing.T) {
 }
 
 func ExampleLinearAttempt_full() {
+	defer checkNumGoroutines(nil)
+
 	defer func() func() {
 		start := runtime.NumGoroutine()
 		return func() {
@@ -133,6 +143,8 @@ func ExampleLinearAttempt_full() {
 }
 
 func ExampleLinearAttempt_slowConsumer() {
+	defer checkNumGoroutines(nil)
+
 	defer func() func() {
 		start := runtime.NumGoroutine()
 		return func() {
@@ -187,6 +199,8 @@ func (c contextNeverDone) Done() <-chan struct{} {
 }
 
 func ExampleLinearAttempt_atMostOneTickAfterCancel() {
+	defer checkNumGoroutines(nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	i := 0

@@ -26,6 +26,8 @@ import (
 )
 
 func TestWorkers_Call(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	startGoroutines := runtime.NumGoroutine()
 	defer func() {
 		time.Sleep(time.Millisecond * 200)

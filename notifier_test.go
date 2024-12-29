@@ -29,6 +29,8 @@ import (
 )
 
 func ExampleNotifier_pubSubKeys() {
+	defer checkNumGoroutines(nil)
+
 	var (
 		k1 = `some-key`
 		k2 = 100
@@ -80,6 +82,8 @@ func ExampleNotifier_pubSubKeys() {
 }
 
 func ExampleNotifier_contextCancelSubscribe() {
+	defer checkNumGoroutines(nil)
+
 	var (
 		nf          Notifier
 		k           = 0
@@ -120,6 +124,8 @@ func ExampleNotifier_contextCancelSubscribe() {
 }
 
 func TestNotifier_PublishContext_cancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		nf          = new(Notifier)
 		out         = make(chan int, 10)
@@ -166,6 +172,8 @@ func TestNotifier_PublishContext_cancel(t *testing.T) {
 }
 
 func TestNotifier_PublishContext_cancelGuarded(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		nf          = new(Notifier)
 		key         = 1
@@ -183,6 +191,8 @@ func TestNotifier_PublishContext_cancelGuarded(t *testing.T) {
 }
 
 func TestNotifier_SubscribeContext_premptivelyCanceled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		nf          = new(Notifier)
 		key         = 1
@@ -209,6 +219,8 @@ func TestNotifier_SubscribeContext_premptivelyCanceled(t *testing.T) {
 }
 
 func TestNotifier_SubscribeContext_exists(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	target := make(chan interface{})
 	nf := Notifier{
 		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
@@ -229,6 +241,8 @@ func TestNotifier_SubscribeContext_exists(t *testing.T) {
 }
 
 func TestNotifier_Unsubscribe_onceOnly(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	target := make(chan interface{})
 	nf := Notifier{
 		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
@@ -251,6 +265,8 @@ func TestNotifier_Unsubscribe_onceOnly(t *testing.T) {
 }
 
 func TestValueOfNotifierTarget_nil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if r := recover(); r == nil || !strings.HasPrefix(fmt.Sprint(r), `bigbuff.Notifier invalid target kind: invalid`) {
 			t.Error(r)
@@ -261,6 +277,8 @@ func TestValueOfNotifierTarget_nil(t *testing.T) {
 }
 
 func TestValueOfNotifierTarget_readOnly(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		a = make(chan struct{})
 		b = (chan<- struct{})(a)
@@ -278,6 +296,8 @@ func TestValueOfNotifierTarget_readOnly(t *testing.T) {
 }
 
 func TestNotifier_Publish_none(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	nf := &Notifier{
 		subscribers: map[interface{}]map[uintptr]notifierSubscriber{},
 	}
@@ -285,6 +305,8 @@ func TestNotifier_Publish_none(t *testing.T) {
 }
 
 func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		nf          Notifier
 		key1        = `k1`
@@ -360,6 +382,8 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 }
 
 func ExampleNotifier_SubscribeCancel() {
+	defer checkNumGoroutines(nil)
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -409,6 +433,8 @@ func ExampleNotifier_SubscribeCancel() {
 }
 
 func TestNotifier_SubscribeCancel_panic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -437,6 +463,8 @@ func TestNotifier_SubscribeCancel_panic(t *testing.T) {
 }
 
 func TestNotifier_SubscribeCancel_parentCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {

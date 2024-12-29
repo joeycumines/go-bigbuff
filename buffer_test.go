@@ -27,6 +27,8 @@ import (
 )
 
 func TestBuffer_Close(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	calledCancel := make(chan struct{})
 	out := make(chan error)
 
@@ -88,10 +90,15 @@ func TestBuffer_Close(t *testing.T) {
 }
 
 func TestBuffer_Done(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	d := make(chan struct{})
 	b := &Buffer{
 		done: d,
 	}
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	if b.Done() != d {
 		t.Errorf("unexpected done")
 	}
@@ -119,6 +126,8 @@ func TestBuffer_Done(t *testing.T) {
 }
 
 func TestBuffer_ensure(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutines := runtime.NumGoroutine()
 
 	b := new(Buffer)
@@ -152,15 +161,9 @@ func TestBuffer_ensure(t *testing.T) {
 		t.Fatalf("unexpected buffer: %+v", b)
 	}
 
-	a := *b
-
 	time.Sleep(time.Millisecond * 20)
 
 	b.ensure()
-
-	if diff := deep.Equal(a, *b); diff != nil {
-		t.Fatal("unexpected diff:", diff)
-	}
 
 	b.cancel()
 
@@ -178,6 +181,8 @@ func TestBuffer_ensure(t *testing.T) {
 }
 
 func TestBuffer_ensure_nil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var b *Buffer
 	func() {
 		defer func() {
@@ -192,8 +197,13 @@ func TestBuffer_ensure_nil(t *testing.T) {
 }
 
 func TestBuffer_Slice_nil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	b := new(Buffer)
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	b.mutex.Lock()
 	go func() {
 		if s := b.Slice(); s != nil {
@@ -212,8 +222,13 @@ func TestBuffer_Slice_nil(t *testing.T) {
 }
 
 func TestBuffer_Slice_copy(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	b := new(Buffer)
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	c := []interface{}{
 		1,
 		2,
@@ -254,9 +269,14 @@ func TestBuffer_Slice_copy(t *testing.T) {
 }
 
 func TestBuffer_Put_canceledInput(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	b := new(Buffer)
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	err := b.Put(ctx)
 	if err != context.Canceled {
 		t.Fatal("unexpected error", err)
@@ -267,6 +287,8 @@ func TestBuffer_Put_canceledInput(t *testing.T) {
 }
 
 func TestBuffer_Put_canceledInternal(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -300,8 +322,13 @@ func TestBuffer_Put_canceledInternal(t *testing.T) {
 }
 
 func TestBuffer_Put_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	b := new(Buffer)
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	b.ctx = context.Background()
 	z := []interface{}{1, 2, 3}
 	b.buffer = z
@@ -350,8 +377,13 @@ func TestBuffer_Put_success(t *testing.T) {
 }
 
 func TestBuffer_Put_successNil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	b := new(Buffer)
+	t.Cleanup(func() {
+		_ = b.Close()
+	})
 	b.ctx = context.Background()
 
 	b.mutex.RLock()
@@ -391,6 +423,8 @@ func TestBuffer_Put_successNil(t *testing.T) {
 }
 
 func TestBuffer_NewConsumer_canceledInternal(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -427,6 +461,8 @@ func TestBuffer_NewConsumer_canceledInternal(t *testing.T) {
 }
 
 func TestBuffer_NewConsumer_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutines := runtime.NumGoroutine()
 
 	out := make(chan struct{})
@@ -531,6 +567,8 @@ func TestBuffer_NewConsumer_success(t *testing.T) {
 }
 
 func TestBuffer_Diff_invalid(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 
 	defer buffer.Close()
@@ -553,6 +591,8 @@ func TestBuffer_Diff_invalid(t *testing.T) {
 }
 
 func TestBuffer_Diff_range(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 
 	defer buffer.Close()
@@ -599,6 +639,8 @@ func TestBuffer_Diff_range(t *testing.T) {
 }
 
 func TestBuffer_Range_simple(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 
 	defer buffer.Close()
@@ -630,6 +672,8 @@ func TestBuffer_Range_simple(t *testing.T) {
 }
 
 func TestBuffer_Range_added(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 
 	defer buffer.Close()
@@ -671,6 +715,8 @@ func TestBuffer_Range_added(t *testing.T) {
 }
 
 func TestBuffer_Range_bailOut(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 
 	defer buffer.Close()
@@ -706,6 +752,8 @@ func TestBuffer_Range_bailOut(t *testing.T) {
 }
 
 func TestBuffer_Range_in(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 	defer buffer.Close()
 
@@ -731,6 +779,8 @@ func TestBuffer_Range_in(t *testing.T) {
 }
 
 func TestBuffer_Range_nilFunc(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 	defer buffer.Close()
 

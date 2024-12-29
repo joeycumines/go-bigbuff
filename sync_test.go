@@ -25,6 +25,8 @@ import (
 )
 
 func TestWaitCond_canceled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cond := sync.NewCond(new(sync.Mutex))
@@ -39,6 +41,8 @@ func TestWaitCond_canceled(t *testing.T) {
 }
 
 func TestWaitCond_nilCond(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := WaitCond(ctx, nil, func() bool {
@@ -50,6 +54,8 @@ func TestWaitCond_nilCond(t *testing.T) {
 }
 
 func TestWaitCond_nilMutex(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cond := &sync.Cond{}
@@ -62,6 +68,8 @@ func TestWaitCond_nilMutex(t *testing.T) {
 }
 
 func TestWaitCond_nilFn(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cond := sync.NewCond(new(sync.Mutex))
@@ -72,6 +80,8 @@ func TestWaitCond_nilFn(t *testing.T) {
 }
 
 func TestWaitCond_nilContext(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	cond := sync.NewCond(new(sync.Mutex))
 	err := WaitCond(nil, cond, func() bool {
 		return true
@@ -82,6 +92,8 @@ func TestWaitCond_nilContext(t *testing.T) {
 }
 
 func TestWaitCond_contextCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutineCount := runtime.NumGoroutine()
 
 	out := make(chan error)
@@ -149,6 +161,8 @@ func TestWaitCond_contextCancel(t *testing.T) {
 }
 
 func TestWaitCond_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutineCount := runtime.NumGoroutine()
 
 	out := make(chan error)

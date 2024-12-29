@@ -27,6 +27,8 @@ import (
 )
 
 func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutines := runtime.NumGoroutine()
 
 	b := new(Buffer)
@@ -128,225 +130,9 @@ func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
 	}
 }
 
-//func TestBuffer_fanInAndOut(t *testing.T) {
-//	// TODO: delete this and replace it with something that makes sense
-//
-//	// iterate on a heavily loaded test multiple times, ensure the goroutine counts stay consistent
-//	initialGoroutines := runtime.NumGoroutine()
-//	var (
-//		preStopGoroutines   []int
-//		firstStopGoroutines []int
-//		postStopGoroutines  []int
-//		inputCount          = 5000
-//		producerCount       = 10
-//		consumerCount       = 10
-//	)
-//
-//	for iterationX := 1; iterationX <= 10; iterationX++ {
-//		buffer := new(Buffer)
-//
-//		for iterationY := 1; iterationY <= 10; iterationY++ {
-//			// build inputs for multiple producers that are self - marking with a timestamp + consumer id
-//
-//			ID := 0
-//			nextID := func() (nextID int) {
-//				nextID = ID
-//				ID++
-//				return
-//			}
-//
-//			// set this when starting to ns epoch
-//			var startedAt int64
-//
-//			type (
-//				InputData struct {
-//					ID       int
-//					Produced time.Duration
-//					Consumed map[int]*[]time.Duration
-//				}
-//			)
-//			var (
-//				maxInputPerProducer = int(math.Ceil(float64(inputCount) / float64(producerCount)))
-//				inputState          = make([]*InputData, inputCount)
-//				producerMap         = make(map[int][]*InputData)
-//				consumerMap         = make(map[int]Consumer)
-//			)
-//			for i := range inputState {
-//				if i != nextID() {
-//					panic("bad id?")
-//				}
-//				inputState[i] = &InputData{
-//					ID:       i,
-//					Consumed: make(map[int]*[]time.Duration),
-//				}
-//			}
-//			inputIndex := 0
-//			for x := 0; x < producerCount; x++ {
-//				producerID := nextID()
-//				producerMap[producerID] = make([]*InputData, 0, maxInputPerProducer)
-//				for y := 0; y < maxInputPerProducer; y++ {
-//					if inputIndex >= inputCount {
-//						break
-//					}
-//					producerMap[producerID] = append(producerMap[producerID], inputState[inputIndex])
-//					inputIndex++
-//				}
-//			}
-//			for x := 0; x < consumerCount; x++ {
-//				consumerID := nextID()
-//				consumerMap[consumerID], _ = buffer.NewConsumer()
-//				for i := range inputState {
-//					inputState[i].Consumed[consumerID] = new([]time.Duration)
-//				}
-//			}
-//
-//			starter := new(sync.RWMutex)
-//			starter.Lock()
-//			wg := new(sync.WaitGroup)
-//			wg.Add(producerCount + consumerCount)
-//
-//			for _, producerData := range producerMap {
-//				func() {
-//					producerData := producerData
-//					go func() {
-//						defer wg.Done()
-//						starter.RLock()
-//						defer starter.RUnlock()
-//						for _, data := range producerData {
-//							data.Produced = time.Duration(time.Now().UnixNano() - startedAt)
-//							if err := buffer.Put(nil, data); err != nil {
-//								panic(err)
-//							}
-//						}
-//					}()
-//				}()
-//			}
-//
-//			for consumerID, consumer := range consumerMap {
-//				func() {
-//					consumerID, consumer := consumerID, consumer
-//					go func() {
-//						defer wg.Done()
-//						starter.RLock()
-//						defer starter.RUnlock()
-//						count := 0
-//						if err := Range(nil, consumer, func(index int, value interface{}) bool {
-//							data := value.(*InputData)
-//							consumed := data.Consumed[consumerID]
-//							*consumed = append(*consumed, time.Duration(time.Now().UnixNano()-startedAt))
-//							count++
-//							return count != inputCount
-//						}); err != nil {
-//							panic(err)
-//						}
-//					}()
-//				}()
-//			}
-//
-//			time.Sleep(time.Millisecond * 10)
-//			startedAt = time.Now().UnixNano()
-//			starter.Unlock()
-//			wg.Wait()
-//
-//			// ensure every consumer received every message in order relative to the producers
-//			for consumerID := range consumerMap {
-//				for _, producerData := range producerMap {
-//					var lastTS time.Duration
-//					for _, data := range producerData {
-//						if len(*data.Consumed[consumerID]) != 1 {
-//							t.Fatalf("unexpected consumed for id %d: %v", consumerID, *data.Consumed[consumerID])
-//						}
-//						ts := (*data.Consumed[consumerID])[0]
-//						if ts <= lastTS {
-//							t.Error("this ts (1) was not after last ts (2)", ts, lastTS)
-//						}
-//						lastTS = ts
-//					}
-//				}
-//			}
-//
-//			// check each message
-//			for _, data := range inputState {
-//				if len(data.Consumed) != consumerCount {
-//					t.Fatal("bad data", data)
-//				}
-//				for _, ts := range data.Consumed {
-//					if len(*ts) != 1 {
-//						t.Fatal("bad data", data)
-//					}
-//				}
-//			}
-//
-//			time.Sleep(time.Millisecond * 60)
-//
-//			if l := len(buffer.buffer); 0 != l {
-//				t.Fatal("bad len", l)
-//			}
-//
-//			preStopGoroutines = append(preStopGoroutines, runtime.NumGoroutine())
-//
-//			for _, consumer := range consumerMap {
-//				if err := consumer.Close(); err != nil {
-//					t.Fatal(err)
-//				}
-//			}
-//
-//			time.Sleep(time.Millisecond * 50)
-//
-//			firstStopGoroutines = append(firstStopGoroutines, runtime.NumGoroutine())
-//		}
-//
-//		if err := buffer.Close(); err != nil {
-//			t.Fatal(err)
-//		}
-//
-//		time.Sleep(time.Millisecond * 50)
-//
-//		postStopGoroutines = append(postStopGoroutines, runtime.NumGoroutine())
-//	}
-//
-//	time.Sleep(time.Second)
-//
-//	finalGoroutines := runtime.NumGoroutine()
-//
-//	//fmt.Println(initialGoroutines)
-//	//fmt.Println(preStopGoroutines)
-//	//fmt.Println(firstStopGoroutines)
-//	//fmt.Println(postStopGoroutines)
-//	//fmt.Println(finalGoroutines)
-//
-//	if finalGoroutines != initialGoroutines {
-//		t.Errorf("inital goroutines %d != final %d", initialGoroutines, finalGoroutines)
-//	}
-//
-//	// compared with the actual counts - initial
-//	maxAllowedPreStop := consumerCount * 6
-//	maxAllowedFirstStop := 2
-//	maxAllowedPostStop := 0
-//
-//	for _, preStop := range preStopGoroutines {
-//		preStop -= initialGoroutines
-//		if preStop > maxAllowedPreStop {
-//			t.Fatal("bad pre stop", preStopGoroutines)
-//		}
-//	}
-//
-//	for _, firstStop := range firstStopGoroutines {
-//		firstStop -= initialGoroutines
-//		if firstStop > maxAllowedFirstStop {
-//			t.Fatal("bad first stop", firstStopGoroutines)
-//		}
-//	}
-//
-//	for _, postStop := range postStopGoroutines {
-//		postStop -= initialGoroutines
-//		if postStop > maxAllowedPostStop {
-//			t.Fatal("bad post stop", postStopGoroutines)
-//		}
-//	}
-//}
-
 func TestFixedBufferCleaner(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan FixedBufferCleanerNotification, 1)
 
 	buffer := new(Buffer)
@@ -465,6 +251,8 @@ func TestFixedBufferCleaner(t *testing.T) {
 }
 
 func TestFixedBufferCleaner_nil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 	defer buffer.Close()
 	buffer.SetCleanerConfig(CleanerConfig{
@@ -538,6 +326,8 @@ func TestFixedBufferCleaner_nil(t *testing.T) {
 }
 
 func TestBuffer_Range_empty(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 	defer buffer.Close()
 	c, err := buffer.NewConsumer()
@@ -555,6 +345,8 @@ func TestBuffer_Range_empty(t *testing.T) {
 }
 
 func TestBuffer_Range_one(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	buffer := new(Buffer)
 	defer buffer.Close()
 	c, err := buffer.NewConsumer()
@@ -583,12 +375,16 @@ func TestBuffer_Range_one(t *testing.T) {
 }
 
 func TestFatalError_Error(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if v := FatalError(errors.New("some_error")).Error(); v != "some_error" {
 		t.Fatal(v)
 	}
 }
 
 func TestFatalError_panic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if v := fmt.Sprint(recover()); v != "bigbuff.FatalError nil err" {
 			t.Error(v)
@@ -598,6 +394,8 @@ func TestFatalError_panic(t *testing.T) {
 }
 
 func TestMinDuration_panicZero(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if r := recover(); fmt.Sprint(r) != `bigbuff.MinDuration invalid duration: 0s` {
 			t.Error(r)
@@ -608,6 +406,8 @@ func TestMinDuration_panicZero(t *testing.T) {
 }
 
 func TestMinDuration_panicNil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if r := recover(); fmt.Sprint(r) != `bigbuff.MinDuration nil function` {
 			t.Error(r)
@@ -618,6 +418,8 @@ func TestMinDuration_panicNil(t *testing.T) {
 }
 
 func TestMinDuration(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		r  = func() (interface{}, error) { return nil, nil }
 		fn = func() func() (time.Duration, interface{}, error) {
@@ -652,18 +454,24 @@ func TestMinDuration(t *testing.T) {
 }
 
 func TestRange_nilConsumer(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Range(context.Background(), nil, func(index int, value interface{}) bool { panic(`unexpected`) }); err == nil {
 		t.Error(err)
 	}
 }
 
 func TestRange_nilFn(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Range(context.Background(), struct{ Consumer }{}, nil); err == nil {
 		t.Error(err)
 	}
 }
 
 func TestRange_contextGuard(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := Range(ctx, struct{ Consumer }{}, func(index int, value interface{}) bool { panic(`unexpected`) }); err != context.Canceled {
@@ -672,6 +480,8 @@ func TestRange_contextGuard(t *testing.T) {
 }
 
 func TestRange_getPanic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx := context.WithValue(context.Background(), 1, 2)
 	err := errors.New(`some_error`)
 	var rollback int
@@ -698,6 +508,8 @@ func TestRange_getPanic(t *testing.T) {
 }
 
 func TestRange_getNilContext(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	err := errors.New(`some_error`)
 	var rollback int
 	defer func() {
@@ -723,6 +535,8 @@ func TestRange_getNilContext(t *testing.T) {
 }
 
 func TestRange_rollback(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		countGet      int
 		countFn       int
@@ -827,6 +641,8 @@ func (m mockConsumer) Rollback() error {
 }
 
 func TestRange_commitErrorHandling(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var buffer Buffer
 	defer buffer.Close()
 	consumer, err := buffer.NewConsumer()

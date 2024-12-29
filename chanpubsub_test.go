@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,8 @@ import (
 )
 
 func ExampleChanPubSub_SubscribeContext() {
+	defer checkNumGoroutines(nil)
+
 	const (
 		subscribers = 3
 		messages    = 4
@@ -133,6 +136,8 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 // TestChanPubSub_basicSendReceive tests a single subscriber receiving all
 // values sent, in order.
 func TestChanPubSub_basicSendReceive(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan int)) // unbuffered channel
 	defer func() {
 		// Ensure it hasn't been broken.
@@ -180,6 +185,8 @@ func TestChanPubSub_basicSendReceive(t *testing.T) {
 // TestChanPubSub_noSubscribers confirms that Send returns 0 when
 // there are no subscribers.
 func TestChanPubSub_noSubscribers(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan string))
 
 	sent := c.Send("hello, nobody")
@@ -200,6 +207,8 @@ func TestChanPubSub_noSubscribers(t *testing.T) {
 // each receiving all messages (the usage pattern is synchronous in the
 // subscribe goroutine).
 func TestChanPubSub_multipleSubscribers(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan int))
 	const numSubscribers = 5
 	const totalSends = 10
@@ -253,6 +262,8 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 // all items means that Send still returns the correct number of subscribers
 // who got each subsequent item.
 func TestChanPubSub_unsubscribeEarly(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan int))
 
 	// We'll have 2 subscribers, but 1 unsubscribes early.
@@ -319,14 +330,18 @@ func TestChanPubSub_unsubscribeEarly(t *testing.T) {
 // concurrently with multiple dynamic subscribers works correctly. This
 // is a stress test, mostly verifying no panics and correct final counts.
 func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	const totalGoroutines = 50
 	const sendsPerGoroutine = 20
+	const expectedMessages = totalGoroutines * sendsPerGoroutine
 
 	c := NewChanPubSub(make(chan int))
 	var wg sync.WaitGroup
+	wg.Add(1)
 
 	// We'll track how many times total messages are received
-	var totalReceived int64
+	var totalReceived, totalSent int64
 	var mu sync.Mutex
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -334,18 +349,22 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 
 	// Start some subscribers that randomly unsubscribe
 	for i := 0; i < totalGoroutines; i++ {
+		seq := c.SubscribeContext(ctx)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			seq := c.SubscribeContext(ctx)
 			count := 0
 			seq(func(v int) bool {
 				mu.Lock()
 				totalReceived++
 				mu.Unlock()
 				count++
-				// Simulate random unsubscribe
-				if count > 2 && count%5 == 0 {
+				// random unsubscribe
+				if count > 2 && count%5 == 0 && rand.IntN(4) == 0 {
+					// add the remaining expected, so we can validate the total
+					mu.Lock()
+					totalReceived += int64(sendsPerGoroutine - count)
+					mu.Unlock()
 					return false // stop early
 				}
 				return true
@@ -361,28 +380,38 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 			for j := 0; j < sendsPerGoroutine; j++ {
 				c.Send(j)
 				time.Sleep(time.Millisecond * 1)
+				mu.Lock()
+				totalSent++
+				mu.Unlock()
 			}
 		}()
 	}
 
-	// Let them do their thing
-	time.Sleep(time.Second * 1)
-	cancel()
-	close(c.C())
+	wg.Done()
 	wg.Wait()
 
-	// We can't reliably check exact counts, but we can check that it didn't break.
+	mu.Lock() // leave it locked, just because (not actually necessary bc wg)
+
+	if totalReceived != expectedMessages {
+		t.Errorf("expected to receive %d messages, got %d", expectedMessages, totalReceived)
+	}
+
+	if totalSent != expectedMessages {
+		t.Errorf("expected to send %d messages, got %d", expectedMessages, totalSent)
+	}
+
 	select {
 	case <-c.broken:
 		t.Error("ChanPubSub ended in a broken state (usage violation) unexpectedly")
 	default:
-		// OK
 	}
 }
 
 // TestChanPubSub_panicWhenChannelBuffered verifies that constructing
 // a ChanPubSub with a buffered channel panics immediately.
 func TestChanPubSub_panicWhenChannelBuffered(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -408,6 +437,8 @@ func mustPanic(t *testing.T, fn func()) (panicValue interface{}) {
 }
 
 func TestChanPubSub_sanityCheckSubscribersDelta(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	isBroken := func(x *ChanPubSub[chan struct{}, struct{}]) bool {
 		select {
 		case <-x.broken:
@@ -540,6 +571,8 @@ func TestChanPubSub_sanityCheckSubscribersDelta(t *testing.T) {
 }
 
 func TestChanPubSub_Wait_brokenDuring(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan struct{}))
 	done := make(chan struct{})
 	go func() {
@@ -566,9 +599,11 @@ func TestChanPubSub_Wait_brokenDuring(t *testing.T) {
 }
 
 func TestChanPubSub_check_brokenPanicMessage(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan struct{}))
 	for range 5 {
-		c.check()
+		c.checkBroken()
 	}
 	c.markBroken()
 	func() {
@@ -577,23 +612,38 @@ func TestChanPubSub_check_brokenPanicMessage(t *testing.T) {
 				t.Errorf(`unexpected recover: %v`, v)
 			}
 		}()
-		c.check()
+		c.checkBroken()
 	}()
 }
 
-func TestChanPubSub_check_failInitMessage(t *testing.T) {
+func TestChanPubSub_checkUsedFactoryFunction_failInitMessage(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &ChanPubSub[chan struct{}, struct{}]{}
-	func() {
-		defer func() {
-			if v := recover(); v != `bigbuff: chanpubsub: must use factory function` {
-				t.Errorf(`unexpected recover: %v`, v)
-			}
+	for i, f := range []func(){
+		c.checkUsedFactoryFunction,
+		func() { c.C() },
+		func() { c.Send(struct{}{}) },
+		func() { c.Add(0) },
+		func() { c.Add(1) },
+		func() { c.Add(-1) },
+		func() { c.SubscribeContext(nil) },
+		c.Wait,
+	} {
+		func() {
+			defer func() {
+				if v := recover(); v != `bigbuff: chanpubsub: must use factory function` {
+					t.Errorf(`%d: unexpected recover: %v`, i, v)
+				}
+			}()
+			f()
 		}()
-		c.check()
-	}()
+	}
 }
 
 func TestChanPubSub_Add_maxInt32(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan struct{}))
 	if v := c.Add(0); v != 0 {
 		t.Errorf(`expected 0, got %d`, v)
@@ -610,6 +660,8 @@ func TestChanPubSub_Add_maxInt32(t *testing.T) {
 }
 
 func TestChanPubSub_Add_minInt32(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan struct{}))
 	defer func() {
 		if v := recover(); v != `bigbuff: chanpubsub: delta out of bounds` {
@@ -620,6 +672,8 @@ func TestChanPubSub_Add_minInt32(t *testing.T) {
 }
 
 func TestChanPubSub_Send_pingCasterAddedBorked(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan struct{}))
 	c.ping.Add(1)
 	c.Add(1)
@@ -643,6 +697,8 @@ func TestChanPubSub_Send_pingCasterAddedBorked(t *testing.T) {
 }
 
 func TestChanPubSub_highContention(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	startedAt := time.Now()
 
 	const (
@@ -831,6 +887,8 @@ func TestChanPubSub_highContention(t *testing.T) {
 }
 
 func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	const (
 		numWorkersSpammingSubscribeUnsubscribe = 500
 		numWorkersReceiving                    = 3
@@ -895,4 +953,175 @@ func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
 
 	wg.Done()
 	wg.Wait()
+}
+
+func TestChanPubSub_SubscribeContext_nilYield(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	time.Sleep(time.Millisecond * 30)
+	startGoroutines := runtime.NumGoroutine()
+	checkGoroutinesBackToBaseline := func() {
+		t.Helper()
+		if n := waitNumGoroutines(time.Second, func(n int) bool { return n <= startGoroutines }); n > startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected less than or equal to start): %d, %d`, startGoroutines, n)
+		}
+	}
+	checkGoroutinesElevatedFromBaseline := func() {
+		t.Helper()
+		n := runtime.NumGoroutine()
+		if n <= startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected more than start, case 1): %d, %d`, startGoroutines, n)
+			return
+		}
+		time.Sleep(time.Millisecond * 10)
+		n = runtime.NumGoroutine()
+		if n <= startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected more than start, 2): %d, %d`, startGoroutines, n)
+		}
+	}
+	checkGoroutinesBackToBaseline()
+	c := NewChanPubSub(make(chan int))
+	checkGoroutinesBackToBaseline()
+	// WARNING: need cancelable context to trigger the background goroutine
+	// (if ctx.Done returns nil, it will skip spawning the goroutine)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// it is really quite difficult to trigger the background goroutine...
+	ctx = &valuelessContext{Context: ctx}
+	iter := c.SubscribeContext(ctx)
+	checkGoroutinesElevatedFromBaseline()
+	if iter == nil {
+		t.Fatal(`expected non-nil iter`)
+	}
+	if v := c.Add(0); v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+	checkGoroutinesElevatedFromBaseline()
+	func() {
+		defer func() {
+			if v := recover(); v != `bigbuff: chanpubsub: iterator yield func is nil` {
+				t.Fatalf(`unexpected recover: %v`, v)
+			}
+		}()
+		iter(nil)
+	}()
+	checkGoroutinesBackToBaseline()
+	if v := c.Add(0); v != 0 {
+		t.Fatalf(`expected 0, got %d`, v)
+	}
+	checkGoroutinesBackToBaseline()
+}
+
+func TestChanPubSub_SubscribeContext_stopsContextOnCallingIterator(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	get := make(chan *ChanPubSub[chan int, int])
+	go func() {
+		c := <-get
+		c.Send(1)
+		c.Send(2)
+		close(c.C())
+	}()
+	startGoroutines := runtime.NumGoroutine()
+	checkGoroutinesBackToBaseline := func() {
+		t.Helper()
+		if n := waitNumGoroutines(time.Second, func(n int) bool { return n <= startGoroutines }); n > startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected less than or equal to start): %d, %d`, startGoroutines, n)
+		}
+	}
+	checkGoroutinesElevatedFromBaseline := func() {
+		t.Helper()
+		n := runtime.NumGoroutine()
+		if n <= startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected more than start, case 1): %d, %d`, startGoroutines, n)
+			return
+		}
+		time.Sleep(time.Millisecond * 10)
+		n = runtime.NumGoroutine()
+		if n <= startGoroutines {
+			t.Errorf(`unexpected num goroutines (expected more than start, 2): %d, %d`, startGoroutines, n)
+		}
+	}
+	checkGoroutinesBackToBaseline()
+	c := NewChanPubSub(make(chan int))
+	checkGoroutinesBackToBaseline()
+	// WARNING: need cancelable context to trigger the background goroutine
+	// (if ctx.Done returns nil, it will skip spawning the goroutine)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// it is really quite difficult to trigger the background goroutine...
+	ctx = &valuelessContext{Context: ctx}
+	iter := c.SubscribeContext(ctx)
+	get <- c // WARNING: only after subscribing
+	checkGoroutinesElevatedFromBaseline()
+	if iter == nil {
+		t.Fatal(`expected non-nil iter`)
+	}
+	if v := c.Add(0); v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+	checkGoroutinesElevatedFromBaseline()
+	var i int
+	for v := range iter {
+		checkGoroutinesBackToBaseline() // should've stopped on calling iter
+		i++
+		if v != i {
+			t.Errorf(`expected value %d, got %d`, i, v)
+		}
+		if i == 2 {
+			if n := waitNumGoroutines(time.Second, func(n int) bool { return n < startGoroutines }); n >= startGoroutines {
+				t.Errorf(`unexpected num goroutines (expected less than start): %d, %d`, startGoroutines, n)
+			}
+			break
+		}
+	}
+	if i != 2 {
+		t.Errorf(`expected 2, got %d`, i)
+	}
+	checkGoroutinesBackToBaseline()
+	if v := c.Add(0); v != 0 {
+		t.Fatalf(`expected 0, got %d`, v)
+	}
+	checkGoroutinesBackToBaseline()
+}
+
+func TestChanPubSub_SubscribeContext_multipleIterCalls(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	c := NewChanPubSub(make(chan int))
+	iter := c.SubscribeContext(context.Background())
+	go func() {
+		c.Send(1)
+		c.Send(2)
+		c.Send(3)
+		close(c.C())
+	}()
+	values := make([][]int, 5)
+	var wg sync.WaitGroup
+	wg.Add(len(values))
+	for i := range values {
+		go func() {
+			defer wg.Done()
+			for v := range iter {
+				values[i] = append(values[i], v)
+			}
+		}()
+	}
+	wg.Wait()
+	var received []int
+	for _, v := range values {
+		if len(v) == 0 {
+			continue
+		}
+		if len(received) != 0 {
+			t.Fatalf(`expected only one worker got values`)
+		}
+		received = v
+	}
+	if !slices.Equal(received, []int{1, 2, 3}) {
+		t.Errorf(`expected [1, 2, 3], got %v`, received)
+	}
+	if v := c.Add(0); v != 0 {
+		t.Errorf(`expected 0, got %d`, v)
+	}
 }

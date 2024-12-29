@@ -27,6 +27,8 @@ import (
 //
 // See also [BenchmarkChanCaster_Send_waitForNextFullCycle].
 func ExampleChanCaster_waitForNextFullCycle() {
+	defer checkNumGoroutines(nil)
+
 	started := NewChanCaster(make(chan struct{}))
 	ended := NewChanCaster(make(chan struct{}))
 
@@ -139,6 +141,8 @@ func ExampleChanCaster_waitForNextFullCycle() {
 }
 
 func ExampleChanCaster_decrementReceiversDuringSend() {
+	defer checkNumGoroutines(nil)
+
 	b := NewChanCaster(make(chan int))
 	var wg sync.WaitGroup
 
@@ -253,6 +257,8 @@ func BenchmarkChanCaster_Send_waitForNextFullCycle(b *testing.B) {
 }
 
 func TestChanCaster_Send_waitForNextFullCycle(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	const (
 		numReceivers     = 100
 		actualCycleCount = 50_000
@@ -356,6 +362,8 @@ func testChanCasterSendWaitForNextFullCycle(numReceivers int, send func(started,
 }
 
 func TestChanCaster_Add_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanCaster(make(chan int))
 
 	assertState := func(hi, lo uint32) {
@@ -471,6 +479,8 @@ func TestChanCaster_Add_success(t *testing.T) {
 }
 
 func FuzzChanCaster_Add(f *testing.F) {
+	f.Cleanup(checkNumGoroutines(f))
+
 	add := func(hi, lo uint32, delta int) {
 		f.Add(hi, lo, delta)
 	}
@@ -592,6 +602,8 @@ func FuzzChanCaster_Add(f *testing.F) {
 }
 
 func FuzzChanCaster_Send(f *testing.F) {
+	f.Cleanup(checkNumGoroutines(f))
+
 	add := func(hi, lo uint32, dec uint8) {
 		f.Add(hi, lo, dec)
 	}
@@ -797,6 +809,8 @@ func storeChanCasterState[C chan V, V any](t *testing.T, caster *ChanCaster[C, V
 }
 
 func TestChanCaster_Send_multipleRacingSenders(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	const n = 500
 	c := NewChanCaster(make(chan struct{}, n*2))
 	c.Add(1)

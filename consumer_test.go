@@ -60,6 +60,8 @@ func (p *mockProducer) commit(c *consumer, offset int) error {
 }
 
 func TestConsumer_Close(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	calledCancel := make(chan struct{})
 	calledDelete := make(chan *consumer)
 	out := make(chan error)
@@ -135,6 +137,8 @@ func TestConsumer_Close(t *testing.T) {
 }
 
 func TestConsumer_Done(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	d := make(chan struct{})
 	c := &consumer{
 		done: d,
@@ -160,6 +164,8 @@ func TestConsumer_Done(t *testing.T) {
 }
 
 func TestConsumer_Get_canceledInput(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -175,6 +181,8 @@ func TestConsumer_Get_canceledInput(t *testing.T) {
 }
 
 func TestConsumer_Get_canceledInternal(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -196,6 +204,8 @@ func TestConsumer_Get_canceledInternal(t *testing.T) {
 }
 
 func TestConsumer_Get_syncError(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &consumer{
 		ctx: context.Background(),
 		producer: &mockProducer{
@@ -224,6 +234,8 @@ func TestConsumer_Get_syncError(t *testing.T) {
 }
 
 func TestConsumer_Get_syncSuccess(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &consumer{
 		ctx: context.Background(),
 		producer: &mockProducer{
@@ -266,6 +278,8 @@ func TestConsumer_Get_syncSuccess(t *testing.T) {
 }
 
 func TestConsumer_Get_asyncSuccess(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	z := make(chan struct {
 		Value interface{}
 		Error error
@@ -323,6 +337,8 @@ func TestConsumer_Get_asyncSuccess(t *testing.T) {
 }
 
 func TestConsumer_Get_asyncError(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	z := make(chan struct {
 		Value interface{}
 		Error error
@@ -365,6 +381,8 @@ func TestConsumer_Get_asyncError(t *testing.T) {
 }
 
 func TestConsumer_Commit_nothing(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan error)
 
 	c := &consumer{}
@@ -391,6 +409,8 @@ func TestConsumer_Commit_nothing(t *testing.T) {
 }
 
 func TestConsumer_Rollback_nothing(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	out := make(chan error)
 
 	c := &consumer{}
@@ -417,6 +437,8 @@ func TestConsumer_Rollback_nothing(t *testing.T) {
 }
 
 func TestConsumer_Rollback(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &consumer{
 		offset: 1,
 	}
@@ -443,6 +465,8 @@ func TestConsumer_Rollback(t *testing.T) {
 }
 
 func TestConsumer_Commit_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &consumer{
 		offset: 159,
 	}
@@ -488,6 +512,8 @@ func TestConsumer_Commit_success(t *testing.T) {
 }
 
 func TestConsumer_Commit_error(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &consumer{
 		offset: 159,
 	}
@@ -522,6 +548,8 @@ func TestConsumer_Commit_error(t *testing.T) {
 
 // TestConsumer_Get_leaky is a regression test for a bug where async wait conditions would block forever
 func TestConsumer_Get_leaky(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	startGoroutines := runtime.NumGoroutine()
 	defer func() {
 		time.Sleep(time.Millisecond * 200)

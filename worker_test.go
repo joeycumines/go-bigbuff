@@ -25,6 +25,8 @@ import (
 )
 
 func TestWorker_Do_panic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if recover() == nil {
 			t.Error(`expected panic`)
@@ -34,6 +36,8 @@ func TestWorker_Do_panic(t *testing.T) {
 }
 
 func TestWorker_Do(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	func() func() {
 		n1 := runtime.NumGoroutine()
 		return func() {

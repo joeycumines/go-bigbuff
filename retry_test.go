@@ -27,6 +27,8 @@ import (
 )
 
 func TestExponentialRetry_panic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if v := fmt.Sprint(recover()); v != "bigbuff.ExponentialRetry nil value" {
 			t.Error(v)
@@ -36,6 +38,8 @@ func TestExponentialRetry_panic(t *testing.T) {
 }
 
 func TestExponentialRetry_success(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -159,6 +163,8 @@ func TestExponentialRetry_success(t *testing.T) {
 }
 
 func TestExponentialRetry_cancelled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -204,6 +210,8 @@ func TestExponentialRetry_cancelled(t *testing.T) {
 }
 
 func TestExponentialRetry_fatal(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -247,6 +255,8 @@ func TestExponentialRetry_fatal(t *testing.T) {
 }
 
 func TestWaitDuration_neg(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		startGoroutines := runtime.NumGoroutine()
 		return func() {
@@ -260,6 +270,8 @@ func TestWaitDuration_neg(t *testing.T) {
 }
 
 func TestWaitDuration_timeout(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		time.Sleep(time.Millisecond * 200)
 		startGoroutines := runtime.NumGoroutine()
@@ -279,6 +291,8 @@ func TestWaitDuration_timeout(t *testing.T) {
 }
 
 func TestWaitDuration_cancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() func() {
 		time.Sleep(time.Millisecond * 200)
 		startGoroutines := runtime.NumGoroutine()
@@ -300,6 +314,8 @@ func TestWaitDuration_cancel(t *testing.T) {
 }
 
 func TestCalcExponentialRetry(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	type TestCase struct {
 		Seed  int64
 		Rate  time.Duration

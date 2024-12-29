@@ -30,6 +30,8 @@ import (
 
 // ExampleCall_rpc provides a (contrived) example of how Call may be used as part of an RPC implementation
 func ExampleCall_rpc() {
+	defer checkNumGoroutines(nil)
+
 	var (
 		methods = map[string]Callable{
 			`add`: NewCallable(func(a, b int) int { return a + b }),
@@ -103,6 +105,8 @@ func ExampleCall_rpc() {
 }
 
 func TestNewCallable_notFunc(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	for i, v := range []interface{}{
 		1,
 		nil,
@@ -124,6 +128,8 @@ func TestNewCallable_notFunc(t *testing.T) {
 }
 
 func TestNewCallable_nilValue(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	for i, v := range []interface{}{
 		(func())(nil),
 		(func(bool) bool)(nil),
@@ -144,6 +150,8 @@ func TestNewCallable_nilValue(t *testing.T) {
 }
 
 func ExampleCallArgs_funcResults() {
+	defer checkNumGoroutines(nil)
+
 	MustCall(
 		NewCallable(fmt.Println),
 		CallArgs(func() (int, string, bool) { return 3, `multiple return values -> varargs`, true }()),
@@ -153,6 +161,8 @@ func ExampleCallArgs_funcResults() {
 }
 
 func TestCallArgs_funcResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var output string
 	MustCall(
 		NewCallable(func(a int, b interface{}, c bool) error {
@@ -167,6 +177,8 @@ func TestCallArgs_funcResults(t *testing.T) {
 }
 
 func TestCallable_Call_noArgs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var count uint32
 	MustCall(NewCallable(func(values ...fmt.Stringer) error {
 		if len(values) != 0 {
@@ -181,6 +193,8 @@ func TestCallable_Call_noArgs(t *testing.T) {
 }
 
 func TestCallable_Call_noArgsButNonNilCallArgs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var count uint32
 	MustCall(
 		NewCallable(func(values ...fmt.Stringer) error {
@@ -198,6 +212,8 @@ func TestCallable_Call_noArgsButNonNilCallArgs(t *testing.T) {
 }
 
 func TestCallable_Call_noArgsButNonNilCallArgsRaw(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var count uint32
 	MustCall(
 		NewCallable(func(values ...fmt.Stringer) error {
@@ -221,6 +237,8 @@ func TestCallable_Call_noArgsButNonNilCallArgsRaw(t *testing.T) {
 }
 
 func TestCallable_Call_argsHasIn(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func(values ...fmt.Stringer) error { panic(`unexpected call`) }),
 		CallArgsRaw(func([]int) int { panic(`unexpected args`) }),
@@ -230,6 +248,8 @@ func TestCallable_Call_argsHasIn(t *testing.T) {
 }
 
 func TestCallable_Call_argsHasInVarargs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func(reader io.Reader) io.WriteCloser { return nil }),
 		CallArgsRaw(func(...int) io.ReadCloser { return nil }),
@@ -240,6 +260,8 @@ func TestCallable_Call_argsHasInVarargs(t *testing.T) {
 }
 
 func TestCallable_Call_argsHasInVarargsAndMandatory(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func(reader io.Reader) io.WriteCloser { return nil }),
 		CallArgsRaw(func(int, ...int) io.ReadCloser { return nil }),
@@ -250,6 +272,8 @@ func TestCallable_Call_argsHasInVarargsAndMandatory(t *testing.T) {
 }
 
 func TestCall_noOptions(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		count uint32
 		fn    = NewCallable(func() { atomic.AddUint32(&count, 1) })
@@ -269,6 +293,8 @@ func TestCall_noOptions(t *testing.T) {
 }
 
 func TestCallable_Call_invalidArgs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func() {}),
 		CallArgsRaw(1),
@@ -278,6 +304,8 @@ func TestCallable_Call_invalidArgs(t *testing.T) {
 }
 
 func TestCallable_Call_nilArgs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func() {}),
 		CallArgsRaw((func())(nil)),
@@ -287,6 +315,8 @@ func TestCallable_Call_nilArgs(t *testing.T) {
 }
 
 func TestCallable_Call_invalidResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func() {}),
 		CallResultsRaw(1),
@@ -296,6 +326,8 @@ func TestCallable_Call_invalidResults(t *testing.T) {
 }
 
 func TestCallable_Call_nilResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(
 		NewCallable(func() {}),
 		CallResultsRaw((func())(nil)),
@@ -305,6 +337,8 @@ func TestCallable_Call_nilResults(t *testing.T) {
 }
 
 func TestCallResultsSlice_noResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		results []float64
 		c       = NewCallable(func() {})
@@ -325,6 +359,8 @@ func TestCallResultsSlice_noResults(t *testing.T) {
 }
 
 func TestCallResultsSlice_repeatedCalls(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		results []fmt.Stringer
 		fn      = func() (a time.Time, b fmt.Stringer, c *strings.Builder) {
@@ -362,18 +398,24 @@ type mockCallable struct {
 func (m *mockCallable) Type() reflect.Type { return m.t() }
 
 func TestCall_notFunc(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(&mockCallable{t: func() reflect.Type { return reflect.TypeOf(1) }}); err == nil || err.Error() != `bigbuff.Call type error: not func: int` {
 		t.Error(err)
 	}
 }
 
 func TestCallResults_noResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() {}), CallResults()); err != nil {
 		t.Error(err)
 	}
 }
 
 func TestCallResults_lessResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var a, b int
 	if err := Call(NewCallable(func() (a, b, c int) {
 		return
@@ -383,6 +425,8 @@ func TestCallResults_lessResults(t *testing.T) {
 }
 
 func TestCallResults_correctResults(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		a, b int
 		c    interface{}
@@ -395,18 +439,24 @@ func TestCallResults_correctResults(t *testing.T) {
 }
 
 func TestCallResults_nonPointer(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() (int, int) { return 3, 3 }), CallResults(new(int), 0)); err == nil || err.Error() != `bigbuff.CallResults results[1] error: int kind int not ptr` {
 		t.Error(err)
 	}
 }
 
 func TestCallResults_nilPointer(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() int { return 3 }), CallResults((*int)(nil))); err == nil || err.Error() != `bigbuff.CallResults results[0] error: *int value is nil` {
 		t.Error(err)
 	}
 }
 
 func TestCallResults_notAssignable(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var out io.ReadCloser
 	if err := Call(NewCallable(func() io.Reader { return nil }), CallResults(&out)); err == nil || err.Error() != `bigbuff.CallResults results[0] error: io.Reader not assignable to io.ReadCloser` {
 		t.Error(err)
@@ -414,6 +464,8 @@ func TestCallResults_notAssignable(t *testing.T) {
 }
 
 func ExampleCallable_Call_results() {
+	defer checkNumGoroutines(nil)
+
 	if err := NewCallable(func() (bool, int, []string) { return true, 6, []string{`a`, `b`} }).Call(nil, fmt.Println); err != nil {
 		panic(err)
 	}
@@ -422,30 +474,40 @@ func ExampleCallable_Call_results() {
 }
 
 func TestCallResultsSlice_notPtr(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() int { return 3 }), CallResultsSlice([]int{})); err == nil || err.Error() != `bigbuff.CallResultsSlice target error: not ptr: []int` {
 		t.Error(err)
 	}
 }
 
 func TestCallResultsSlice_nilPtr(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() int { return 3 }), CallResultsSlice((*[]int)(nil))); err == nil || err.Error() != `bigbuff.CallResultsSlice target error: nil ptr: *[]int` {
 		t.Error(err)
 	}
 }
 
 func TestCallResultsSlice_notSlice(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() int { return 3 }), CallResultsSlice(new(bool))); err == nil || err.Error() != `bigbuff.CallResultsSlice target error: not slice: *bool` {
 		t.Error(err)
 	}
 }
 
 func TestCallResultsSlice_notAssignable(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() io.Writer { return nil }), CallResultsSlice(new([]io.WriteCloser))); err == nil || err.Error() != `bigbuff.CallResultsSlice results[0] error: io.Writer not assignable to io.WriteCloser` {
 		t.Error(err)
 	}
 }
 
 func TestCallResultsSlice_assignable(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	if err := Call(NewCallable(func() io.WriteCloser { return nil }), CallResultsSlice(new([]io.Writer))); err != nil {
 		t.Error(err)
 	}
@@ -481,6 +543,8 @@ func (x callPassTester) f1(a int, b *bool, c interface{}, d fmt.Stringer) (e str
 }
 
 func Test_callPass_f1(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	var (
 		a, b, c, d                         = 123, true, new(bytes.Buffer), new(strings.Builder)
 		e, f, g, h                         = `456`, 789, make(chan struct{}), new(bytes.Reader)

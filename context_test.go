@@ -27,6 +27,8 @@ import (
 )
 
 func TestConflatedContext_panicOnNoInput(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("expected panic, got none")
@@ -36,6 +38,8 @@ func TestConflatedContext_panicOnNoInput(t *testing.T) {
 }
 
 func TestConflatedContext_allCanceledInitially(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	// Create contexts that are all canceled.
 	canceledCtx1, cancel1 := context.WithCancel(context.Background())
 	cancel1()
@@ -57,6 +61,8 @@ func TestConflatedContext_allCanceledInitially(t *testing.T) {
 }
 
 func TestConflatedContext_oneActiveOneCanceled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	activeCtx, cancelActive := context.WithCancel(context.Background())
 	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
 	cancelCanceled() // canceled from the start
@@ -84,6 +90,8 @@ func TestConflatedContext_oneActiveOneCanceled(t *testing.T) {
 }
 
 func TestConflatedContext_remainsActiveIfOneStaysActive(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	ctx3, cancel3 := context.WithCancel(context.Background())
@@ -120,6 +128,8 @@ func TestConflatedContext_remainsActiveIfOneStaysActive(t *testing.T) {
 }
 
 func TestConflatedContext_usesFirstContextValues(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	type key string
 	const testKey key = "testKey"
 
@@ -141,6 +151,8 @@ func TestConflatedContext_usesFirstContextValues(t *testing.T) {
 }
 
 func TestConflatedContext_explicitCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
 
@@ -163,6 +175,8 @@ func TestConflatedContext_explicitCancel(t *testing.T) {
 }
 
 func TestConflatedContext_partialTimeoutCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel1()
 
@@ -192,6 +206,8 @@ func TestConflatedContext_partialTimeoutCancel(t *testing.T) {
 }
 
 func TestChainAfterFunc_callsFuncOnOtherCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	other, otherCancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,6 +226,8 @@ func TestChainAfterFunc_callsFuncOnOtherCancel(t *testing.T) {
 }
 
 func TestChainAfterFunc_callsFuncOnCtxCancel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	other, otherCancel := context.WithCancel(context.Background())
 	defer otherCancel()
@@ -228,6 +246,8 @@ func TestChainAfterFunc_callsFuncOnCtxCancel(t *testing.T) {
 }
 
 func TestChainAfterFunc_doesNotCallFuncIfAlreadyCalled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	other, otherCancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -262,6 +282,8 @@ func TestChainAfterFunc_doesNotCallFuncIfAlreadyCalled(t *testing.T) {
 }
 
 func TestChainAfterFunc_otherAlreadyCanceled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -300,6 +322,8 @@ func TestChainAfterFunc_otherAlreadyCanceled(t *testing.T) {
 }
 
 func TestCombineContext_each(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutineCount := runtime.NumGoroutine()
 
 	for count := 1; count <= 100; count++ {
@@ -344,6 +368,8 @@ func TestCombineContext_each(t *testing.T) {
 }
 
 func TestCombineContext_nils(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	initialGoroutineCount := runtime.NumGoroutine()
 
 	for count := 2; count <= 20; count++ {
@@ -389,6 +415,8 @@ func TestCombineContext_nils(t *testing.T) {
 }
 
 func TestCombineContext_pairs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	type TestCase struct {
 		Name      string
 		Primary   context.Context
@@ -648,5 +676,198 @@ func TestCombineContext_pairs(t *testing.T) {
 			}()
 			testCase.Test(CombineContext(testCase.Primary, testCase.Secondary))
 		}()
+	}
+}
+
+func TestCombineContext_nilOthersDoesNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	t.Cleanup(checkNumGoroutines(t))
+
+	type ctxKey struct{}
+	ctxVal := new(int)
+	pretendCustomContext := context.WithValue(&valuelessContext{Context: ctx}, ctxKey{}, ctxVal)
+
+	result := CombineContext(pretendCustomContext, nil, nil, nil, nil, nil, nil, nil)
+
+	if result != pretendCustomContext {
+		t.Error("expected CombineContext to return the first context if all others are nil")
+	}
+}
+
+func TestCombineContext_anyCanceledExitsEarly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	t.Cleanup(checkNumGoroutines(t))
+
+	type ctxKey struct{}
+	ctxVal := new(int)
+	pretendCustomContext := context.WithValue(&valuelessContext{Context: ctx}, ctxKey{}, ctxVal)
+
+	canceledContext, canceledContextCancel := context.WithCancel(context.Background())
+	canceledContextCancel()
+
+	result := CombineContext(pretendCustomContext, nil, nil, nil, nil, &valuelessContext{Context: canceledContext}, nil, nil)
+
+	if result == pretendCustomContext {
+		t.Error(`expected a different context than the input`)
+	}
+
+	if err := result.Err(); err != context.Canceled {
+		t.Error(`unexpected context error:`, err)
+	}
+
+	if v := result.Value(ctxKey{}); v != ctxVal {
+		t.Error(`unexpected context value:`, v)
+	}
+}
+
+func TestCombineContext_otherContextCancels_extra0(t *testing.T) {
+	testCombineContextOtherContextCancels(t, 0)
+}
+
+func TestCombineContext_otherContextCancels_extra1(t *testing.T) {
+	testCombineContextOtherContextCancels(t, 1)
+}
+
+func TestCombineContext_otherContextCancels_extra2(t *testing.T) {
+	testCombineContextOtherContextCancels(t, 2)
+}
+
+func TestCombineContext_otherContextCancels_extra3(t *testing.T) {
+	testCombineContextOtherContextCancels(t, 3)
+}
+
+func testCombineContextOtherContextCancels(t *testing.T, extra int) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	otherContext, otherContextCancel := context.WithCancel(context.Background())
+	t.Cleanup(otherContextCancel)
+
+	extras := make([]context.Context, 5)
+	for i := range min(len(extras), extra) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		extras[i] = &valuelessContext{Context: ctx}
+	}
+
+	t.Cleanup(checkNumGoroutines(t))
+
+	type ctxKey struct{}
+	ctxVal := new(int)
+	pretendCustomContext := context.WithValue(&valuelessContext{Context: ctx}, ctxKey{}, ctxVal)
+
+	goroutinesBefore := runtime.NumGoroutine()
+	result := CombineContext(pretendCustomContext, nil, nil, extras[0], nil, &valuelessContext{Context: otherContext}, extras[1], extras[2])
+	goroutinesAfter := runtime.NumGoroutine()
+	t.Log(`goroutines before:`, goroutinesBefore, `after:`, goroutinesAfter)
+	// the 2 are waiting for ctx and otherContext
+	if expected := goroutinesBefore + 2 + extra; goroutinesAfter != expected {
+		t.Error(`unexpected number of goroutines, expected:`, expected, `got:`, goroutinesAfter)
+	}
+
+	if result == pretendCustomContext {
+		t.Error(`expected a different context than the input`)
+	}
+
+	if err := result.Err(); err != nil {
+		t.Error(`unexpected context error:`, err)
+	}
+
+	if v := result.Value(ctxKey{}); v != ctxVal {
+		t.Error(`unexpected context value:`, v)
+	}
+
+	done := result.Done()
+
+	time.Sleep(time.Millisecond * 20)
+
+	select {
+	case <-done:
+		t.Error(`expected result not yet canceled`)
+	default:
+	}
+
+	otherContextCancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for done channel`)
+	}
+
+	if err := result.Err(); err != context.Canceled {
+		t.Error(`unexpected context error:`, err)
+	}
+
+	if result.Done() != done {
+		t.Error(`unexpected done channel`)
+	}
+}
+
+func TestCombineContext_noExtraGoroutinesWhenNotCustomContext(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	type ctxKey struct{}
+	ctxVal := new(int)
+	ctx = context.WithValue(ctx, ctxKey{}, ctxVal)
+
+	extras := make([]context.Context, 2)
+	for i := range extras {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		extras[i] = context.WithValue(ctx, ctxKey{}, i)
+	}
+
+	goroutinesBefore := runtime.NumGoroutine()
+	result := CombineContext(ctx, nil, nil, extras[0], nil, extras[1], nil)
+	goroutinesAfter := runtime.NumGoroutine()
+	t.Log(`goroutines before:`, goroutinesBefore, `after:`, goroutinesAfter)
+	if goroutinesBefore != goroutinesAfter {
+		t.Error(`unexpected number of goroutines, expected:`, goroutinesBefore, `got:`, goroutinesAfter)
+	}
+
+	if result == ctx {
+		t.Error(`expected a different context than the input`)
+	}
+
+	if err := result.Err(); err != nil {
+		t.Error(`unexpected context error:`, err)
+	}
+
+	if v := result.Value(ctxKey{}); v != ctxVal {
+		t.Error(`unexpected context value:`, v)
+	}
+
+	done := result.Done()
+
+	time.Sleep(time.Millisecond * 20)
+
+	select {
+	case <-done:
+		t.Error(`expected result not yet canceled`)
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for done channel`)
+	}
+
+	if err := result.Err(); err != context.Canceled {
+		t.Error(`unexpected context error:`, err)
+	}
+
+	if result.Done() != done {
+		t.Error(`unexpected done channel`)
 	}
 }

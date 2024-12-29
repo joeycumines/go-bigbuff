@@ -26,8 +26,14 @@ import (
 )
 
 func TestNewChannel_ctxDefaults(t *testing.T) {
-	c, err := NewChannel(nil, time.Second, make(chan struct{}))
+	t.Cleanup(checkNumGoroutines(t))
 
+	c, err := NewChannel(nil, time.Second, make(chan struct{}))
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil {
 		t.Error("unexpected error", err)
 	}
@@ -40,8 +46,14 @@ func TestNewChannel_ctxDefaults(t *testing.T) {
 }
 
 func TestNewChannel_pollRateDefaults(t *testing.T) {
-	c, err := NewChannel(context.Background(), 0, make(chan struct{}))
+	t.Cleanup(checkNumGoroutines(t))
 
+	c, err := NewChannel(context.Background(), 0, make(chan struct{}))
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil {
 		t.Error("unexpected error", err)
 	}
@@ -54,6 +66,8 @@ func TestNewChannel_pollRateDefaults(t *testing.T) {
 }
 
 func TestNewChannel_pollRateNegative(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c, err := NewChannel(context.Background(), -1, make(chan struct{}))
 
 	if err == nil || err.Error() != "bigbuff.NewChannel poll rate must be > 0, or 0 to use the default" {
@@ -66,6 +80,8 @@ func TestNewChannel_pollRateNegative(t *testing.T) {
 }
 
 func TestNewChannel_nilSource(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c, err := NewChannel(context.Background(), time.Second, nil)
 
 	if err == nil || err.Error() != "bigbuff.NewChannel nil source" {
@@ -78,6 +94,8 @@ func TestNewChannel_nilSource(t *testing.T) {
 }
 
 func TestNewChannel_nonChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c, err := NewChannel(context.Background(), time.Second, 4)
 
 	if err == nil || err.Error() != "bigbuff.NewChannel source (int) must be a channel" {
@@ -90,11 +108,17 @@ func TestNewChannel_nonChannel(t *testing.T) {
 }
 
 func TestNewChannel_readChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan struct{})
 	var read <-chan struct{} = in
 
 	c, err := NewChannel(context.Background(), time.Second, read)
-
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil {
 		t.Error("unexpected error", err)
 	}
@@ -107,10 +131,16 @@ func TestNewChannel_readChannel(t *testing.T) {
 }
 
 func TestNewChannel_rwChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan struct{})
 
 	c, err := NewChannel(context.Background(), time.Second, in)
-
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil {
 		t.Error("unexpected error", err)
 	}
@@ -123,11 +153,17 @@ func TestNewChannel_rwChannel(t *testing.T) {
 }
 
 func TestNewChannel_rwChannelClosed(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan struct{})
 	close(in)
 
 	c, err := NewChannel(context.Background(), time.Second, in)
-
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil {
 		t.Error("unexpected error", err)
 	}
@@ -140,6 +176,8 @@ func TestNewChannel_rwChannelClosed(t *testing.T) {
 }
 
 func TestNewChannel_writeChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan struct{})
 	var write chan<- struct{} = in
 
@@ -155,6 +193,8 @@ func TestNewChannel_writeChannel(t *testing.T) {
 }
 
 func TestNewChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	in := make(chan struct{}, 1)
@@ -213,6 +253,8 @@ func TestNewChannel(t *testing.T) {
 }
 
 func TestChannel_Buffer_nil(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := &Channel{
 		valid: true,
 	}
@@ -225,6 +267,8 @@ func TestChannel_Buffer_nil(t *testing.T) {
 }
 
 func TestChannel_Buffer(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	o := make([]interface{}, 3, 10)
 	o[0] = 0
 	o[1] = 1
@@ -252,6 +296,8 @@ func TestChannel_Buffer(t *testing.T) {
 }
 
 func TestChannel_Close(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	cancel := make(chan struct{})
 
 	done := make(chan struct{})
@@ -365,6 +411,8 @@ func TestChannel_Close(t *testing.T) {
 }
 
 func TestChannel_Get(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	z := new(struct{})
 
 	input := []interface{}{
@@ -741,11 +789,18 @@ func TestChannel_Get(t *testing.T) {
 }
 
 func TestConsumer_Get_inputCanceled(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan interface{}, 2)
 
 	in <- 14
 
 	c, err := NewChannel(nil, time.Millisecond, in)
+	if c != nil {
+		t.Cleanup(func() {
+			_ = c.Close()
+		})
+	}
 	if err != nil || c == nil {
 		t.Fatal("unexpected", c, err)
 	}
@@ -794,6 +849,8 @@ func TestConsumer_Get_inputCanceled(t *testing.T) {
 }
 
 func TestChannel_Rollback_errs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan interface{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -828,6 +885,8 @@ func TestChannel_Rollback_errs(t *testing.T) {
 }
 
 func TestChannel_Commit_errs(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan interface{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -867,6 +926,8 @@ func TestChannel_Commit_errs(t *testing.T) {
 }
 
 func TestChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	in := make(chan int, 50)
 
 	var (
@@ -882,6 +943,7 @@ func TestChannel(t *testing.T) {
 	wg.Add(5)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	out := make(chan int, 100)
 	output := make([]int, 0, 10000)
@@ -902,6 +964,11 @@ func TestChannel(t *testing.T) {
 		defer wg.Done()
 
 		c, err := NewChannel(nil, 0, in)
+		if c != nil {
+			t.Cleanup(func() {
+				_ = c.Close()
+			})
+		}
 		if err != nil || c == nil {
 			t.Error("unexpected", c, err)
 		}
@@ -938,6 +1005,11 @@ func TestChannel(t *testing.T) {
 		defer wg.Done()
 
 		c, err := NewChannel(nil, 0, in)
+		if c != nil {
+			t.Cleanup(func() {
+				_ = c.Close()
+			})
+		}
 		if err != nil || c == nil {
 			t.Error("unexpected", c, err)
 		}
@@ -974,6 +1046,11 @@ func TestChannel(t *testing.T) {
 		defer wg.Done()
 
 		c, err := NewChannel(nil, 0, in)
+		if c != nil {
+			t.Cleanup(func() {
+				_ = c.Close()
+			})
+		}
 		if err != nil || c == nil {
 			t.Error("unexpected", c, err)
 		}
