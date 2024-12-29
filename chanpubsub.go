@@ -61,10 +61,6 @@ type ChanPubSub[C chan V, V any] struct {
 	//	2. Wait until ping has been incremented (if sends are in progress, i.e.
 	//	   attempting to acquire or holding the write lock), or briefly
 	//	   prevent sends from progressing (both are about avoiding wonky state)
-	//
-	// The wonky state case is of particular concern for use with buffered
-	// channels, which would otherwise run the risk of decrementing ping past
-	// zero, causing a panic.
 	sendingMu sync.RWMutex
 	// subscribers tracks the total number of subscribers.
 	subscribers atomic.Int32
