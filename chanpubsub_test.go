@@ -133,6 +133,45 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 	}
 }
 
+func BenchmarkChanPubSub_SubscribeContext_highContention(b *testing.B) {
+	const numReceivers = 100_000
+
+	c := NewChanPubSub(make(chan struct{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var allStopped sync.WaitGroup
+	allStopped.Add(numReceivers)
+
+	var count int32
+
+	for i := 0; i < numReceivers; i++ {
+		iter := c.SubscribeContext(ctx)
+		go func() {
+			defer allStopped.Done()
+			for range iter {
+				atomic.AddInt32(&count, 1)
+			}
+		}()
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bmrInt = c.Send(struct{}{})
+		if bmrInt != numReceivers {
+			b.Fatalf(`expected %d, got %d`, numReceivers, bmrInt)
+		}
+	}
+	cancel()
+	allStopped.Wait()
+	b.StopTimer()
+
+	if v := int(atomic.LoadInt32(&count)); v != b.N*numReceivers {
+		b.Errorf(`expected %d, got %d`, b.N*numReceivers, v)
+	}
+}
+
 // TestChanPubSub_basicSendReceive tests a single subscriber receiving all
 // values sent, in order.
 func TestChanPubSub_basicSendReceive(t *testing.T) {
@@ -1123,5 +1162,394 @@ func TestChanPubSub_SubscribeContext_multipleIterCalls(t *testing.T) {
 	}
 	if v := c.Add(0); v != 0 {
 		t.Errorf(`expected 0, got %d`, v)
+	}
+}
+
+func TestChanPubSub_SubscribeContext_brokenDuring(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	c := NewChanPubSub(make(chan int))
+
+	c.Subscribe() // manual subscriber, for getting it to the desired state
+
+	iter1 := c.SubscribeContext(context.Background())
+
+	if v := c.ping.Add(0); v != 0 {
+		t.Fatalf(`expected 0, got %d`, v)
+	}
+
+	expectPanic := func() {
+		if v := recover(); v != `bigbuff: chanpubsub: state invariant violation` {
+			t.Errorf(`unexpected recover: %v`, v)
+		}
+	}
+
+	sending := make(chan struct{})
+	go func() {
+		defer close(sending)
+		defer expectPanic()
+		c.Send(1)
+	}()
+
+	iter1Ch := make(chan int)
+	go func() {
+		defer close(iter1Ch)
+		defer expectPanic()
+		for v := range iter1 {
+			iter1Ch <- v
+		}
+	}()
+
+	// starts at 2, because it only decrements after all sent
+	// (but iter1 should be waiting, rn)
+	for i := 0; c.ping.Add(0) != 2; {
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected ping to be set:`, c.ping.Add(0))
+		}
+	}
+
+	// unblocks the ability to enqueue more values
+	if v := <-c.C(); v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+
+	// confirm we are good
+	for i := 0; c.ping.Add(0) != 0; {
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected ping to be back to 0`)
+		}
+	}
+	for i := 0; ; {
+		if c.sendingMu.TryRLock() {
+			c.sendingMu.RUnlock()
+			break
+		}
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected sendingMu to be unlocked for reading`)
+		}
+	}
+	// at which point, we should be able to receive our iter1 value
+	if v := <-iter1Ch; v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+
+	// ... but send is still blocking
+	{
+		c.pongC.L.Lock()
+		n := c.pongN
+		c.pongC.L.Unlock()
+		if n != 1 {
+			t.Fatalf(`expected 1, got %d`, n)
+		}
+	}
+
+	iter2Ch := make(chan int)
+
+	nothingDoneOrSent := func() {
+		var s string
+		select {
+		case <-sending:
+			s = `sending`
+		case <-iter1Ch:
+			s = `iter1`
+		case <-iter2Ch:
+			s = `iter2`
+		case <-c.C():
+			s = `c.C()`
+		default:
+			return
+		}
+		t.Fatal(`expected nothing done or sent:`, s)
+	}
+
+	nothingDoneOrSent()
+	time.Sleep(time.Millisecond * 10)
+	nothingDoneOrSent()
+	iter2 := c.SubscribeContext(context.Background())
+	go func() {
+		defer close(iter2Ch)
+		defer expectPanic()
+		for v := range iter2 {
+			iter2Ch <- v
+		}
+	}()
+	nothingDoneOrSent()
+	time.Sleep(time.Millisecond * 10)
+	nothingDoneOrSent()
+
+	c.markBroken()
+
+	select {
+	case _, ok := <-sending:
+		if ok {
+			t.Fatal(`expected sending to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for sending to close`)
+	}
+
+	select {
+	case _, ok := <-iter1Ch:
+		if ok {
+			t.Fatal(`expected iter1 to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for iter1 to close`)
+	}
+
+	select {
+	case _, ok := <-iter2Ch:
+		if ok {
+			t.Fatal(`expected iter2 to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for iter2 to close`)
+	}
+}
+
+func TestChanPubSub_SubscribeContext_brokenBefore(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	c := NewChanPubSub(make(chan int))
+
+	c.Subscribe() // manual subscriber, for getting it to the desired state
+
+	iter1 := c.SubscribeContext(context.Background())
+
+	if v := c.ping.Add(0); v != 0 {
+		t.Fatalf(`expected 0, got %d`, v)
+	}
+
+	expectPanic := func() {
+		if v := recover(); v != `bigbuff: chanpubsub: state invariant violation` {
+			t.Errorf(`unexpected recover: %v`, v)
+		}
+	}
+
+	sending := make(chan struct{})
+	go func() {
+		defer close(sending)
+		defer expectPanic()
+		c.Send(1)
+	}()
+
+	iter1Ch := make(chan int)
+	go func() {
+		defer close(iter1Ch)
+		defer expectPanic()
+		for v := range iter1 {
+			iter1Ch <- v
+		}
+	}()
+
+	// starts at 2, because it only decrements after all sent
+	// (but iter1 should be waiting, rn)
+	for i := 0; c.ping.Add(0) != 2; {
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected ping to be set:`, c.ping.Add(0))
+		}
+	}
+
+	// unblocks the ability to enqueue more values
+	if v := <-c.C(); v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+
+	// confirm we are good
+	for i := 0; c.ping.Add(0) != 0; {
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected ping to be back to 0`)
+		}
+	}
+	for i := 0; ; {
+		if c.sendingMu.TryRLock() {
+			c.sendingMu.RUnlock()
+			break
+		}
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected sendingMu to be unlocked for reading`)
+		}
+	}
+
+	// ... but send is still blocking
+	{
+		c.pongC.L.Lock()
+		n := c.pongN
+		c.pongC.L.Unlock()
+		if n != 1 {
+			t.Fatalf(`expected 1, got %d`, n)
+		}
+	}
+
+	iter2Ch := make(chan int)
+
+	nothingDoneOrSent := func() {
+		var s string
+		select {
+		case <-sending:
+			s = `sending`
+		case <-iter2Ch:
+			s = `iter2`
+		case <-c.C():
+			s = `c.C()`
+		default:
+			return
+		}
+		t.Fatal(`expected nothing done or sent:`, s)
+	}
+
+	nothingDoneOrSent()
+	time.Sleep(time.Millisecond * 10)
+	nothingDoneOrSent()
+	iter2 := c.SubscribeContext(context.Background())
+	go func() {
+		defer close(iter2Ch)
+		defer expectPanic()
+		for v := range iter2 {
+			iter2Ch <- v
+		}
+	}()
+	nothingDoneOrSent()
+	time.Sleep(time.Millisecond * 10)
+	nothingDoneOrSent()
+
+	c.markBroken()
+
+	select {
+	case _, ok := <-sending:
+		if ok {
+			t.Fatal(`expected sending to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for sending to close`)
+	}
+
+	select {
+	case _, ok := <-iter2Ch:
+		if ok {
+			t.Fatal(`expected iter2 to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for iter2 to close`)
+	}
+
+	// we blocked iter1 so we could test the guard code path
+	if v := <-iter1Ch; v != 1 {
+		t.Fatalf(`expected 1, got %d`, v)
+	}
+	select {
+	case _, ok := <-iter1Ch:
+		if ok {
+			t.Fatal(`expected iter1 to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for iter1 to close`)
+	}
+}
+
+func TestChanPubSub_Add_brokenDuringUnsubscribe(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	c := NewChanPubSub(make(chan int))
+
+	const messages = 5
+	c.Add(messages)
+
+	if v := c.ping.Add(0); v != 0 {
+		t.Fatalf(`expected 0, got %d`, v)
+	}
+
+	sending := make(chan struct{})
+	go func() {
+		defer close(sending)
+		defer func() {
+			if v := recover(); v != `bigbuff: chancaster: send: state invariant violation` {
+				t.Errorf(`unexpected recover: %v`, v)
+			}
+		}()
+		c.Send(1)
+	}()
+
+	// wait until we block on sending to all (ping)
+	for i := 0; c.ping.Add(0) != messages; {
+		time.Sleep(time.Millisecond * 10)
+		i++
+		if i >= 10 {
+			t.Fatal(`expected ping to be set:`, c.ping.Add(0))
+		}
+	}
+
+	time.Sleep(time.Millisecond * 10)
+	select {
+	case <-sending:
+		t.Fatal(`expected nothing closed, sending closed?`)
+	default:
+	}
+
+	// decrement it past what is valid
+	c.subscribers.Add(1)
+	func() {
+		defer func() {
+			if v := recover(); v != `bigbuff: chancaster: add: state invariant violation` {
+				t.Error(`unexpected panic:`, v)
+			}
+		}()
+		c.Add(-messages - 1)
+	}()
+
+	// so it can unblock
+	for range messages {
+		if v := <-c.ping.C; v != 1 {
+			t.Fatalf(`expected 1, got %d`, v)
+		}
+	}
+
+	// all should unblock
+	select {
+	case _, ok := <-sending:
+		if ok {
+			t.Fatal(`expected sending to be closed`)
+		}
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for sending to close`)
+	}
+}
+
+func TestChanPubSub_Send_guardSubscribersInner(t *testing.T) {
+	c := NewChanPubSub(make(chan int))
+	c.sendMu.Lock()
+	c.ping.Add(99)
+	c.subscribers.Store(1)
+	done := make(chan struct{})
+	go func() {
+		if v := c.Send(1); v != 0 {
+			t.Errorf(`expected 0, got %d`, v)
+		}
+		close(done)
+	}()
+	time.Sleep(time.Millisecond * 50)
+	select {
+	case <-done:
+		t.Fatal(`expected send to block`)
+	default:
+	}
+	c.subscribers.Store(0)
+	c.sendMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal(`timeout waiting for send`)
 	}
 }
