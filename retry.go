@@ -37,6 +37,16 @@ const (
 // will include any accompanying result, as well as the unpacked error value (which will always be non-nil since
 // FatalError will panic otherwise). 3. Before each call to value the context error will be checked, and if non-nil
 // will be propagated as-is with a nil result. 4. This implementation uses the math/rand package.
+//
+// # Alternatives
+//
+// This implementation isn't particularly ergonomic, and was intended for the
+// specific use case of chaining together [Workers], and the older [Exclusive]
+// API. For a more flexible and powerful, and likely more ergonomic
+// implementation, use [Retry], from [github.com/joeycumines/go-expbkoff].
+//
+// [Retry]: https://pkg.go.dev/github.com/joeycumines/go-expbkoff#Retry
+// [github.com/joeycumines/go-expbkoff]: https://github.com/joeycumines/go-expbkoff
 func ExponentialRetry(ctx context.Context, rate time.Duration, value func() (interface{}, error)) func() (interface{}, error) {
 	if ctx == nil {
 		ctx = context.Background()
