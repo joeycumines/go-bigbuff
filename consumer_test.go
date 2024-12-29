@@ -576,7 +576,8 @@ func TestConsumer_Get_leaky(t *testing.T) {
 			select {
 			case <-ticker.C:
 				if err := buffer.Put(ctx, x); err != nil {
-					t.Fatal(err)
+					t.Error(err)
+					panic(err)
 				}
 			case <-ctx.Done():
 				return

@@ -334,6 +334,7 @@ func TestCombineContext_each(t *testing.T) {
 			)
 			for i := 0; i < count; i++ {
 				ctx, cancel := context.WithCancel(context.Background())
+				_ = cancel // silence go vet
 				others[i] = ctx
 				if i == index {
 					indexCancel = cancel
@@ -380,6 +381,7 @@ func TestCombineContext_nils(t *testing.T) {
 			)
 			for i := 0; i < count; i++ {
 				ctx, cancel := context.WithCancel(context.Background())
+				_ = cancel // silence go vet
 				others[i] = ctx
 				if i == index {
 					indexCancel = cancel

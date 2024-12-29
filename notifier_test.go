@@ -336,7 +336,8 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 				for x := 0; x < increments1; x++ {
 					v := <-c
 					if v != x {
-						t.Fatal(v, x)
+						t.Error(v, x)
+						panic(`fatal test error`)
 					}
 				}
 			}()

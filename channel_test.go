@@ -196,6 +196,7 @@ func TestNewChannel(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	_ = cancel // silence go vet
 
 	in := make(chan struct{}, 1)
 
