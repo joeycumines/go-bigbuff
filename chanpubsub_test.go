@@ -1528,6 +1528,8 @@ func TestChanPubSub_Add_brokenDuringUnsubscribe(t *testing.T) {
 }
 
 func TestChanPubSub_Send_guardSubscribersInner(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
 	c := NewChanPubSub(make(chan int))
 	c.sendMu.Lock()
 	c.ping.Add(99)
