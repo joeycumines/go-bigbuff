@@ -42,7 +42,7 @@ const chanPubSubStateInvariantViolation = `bigbuff: chanpubsub: state invariant 
 //  7. Subscribers MUST promptly and _continually_ operate on a cycle of
 //     receiving (from [ChanPubSub.C]) then waiting (on [ChanPubSub.Wait]),
 //     until such a time as they are no longer interested in receiving values,
-//     in which case they MUST promptly unsubscribe. Subscribers MAY the
+//     in which case they MUST promptly unsubscribe. Subscribers MAY use the
 //     channel in a select statement, to trigger unsubscribe, as an example.
 //     After unsubscribing, values MUST NOT be received, from the channel.
 type ChanPubSub[C chan V, V any] struct {
@@ -92,7 +92,8 @@ func NewChanPubSub[C chan V, V any](c C) *ChanPubSub[C, V] {
 // [ChanPubSub.Send]), and receiving from it MUST obey the contract.
 // See also [ChanPubSub], for the contract.
 func (x *ChanPubSub[C, V]) C() C {
-	x.check()
+	x.checkUsedFactoryFunction()
+	x.checkBroken()
 	return x.ping.C
 }
 
@@ -106,15 +107,24 @@ func (x *ChanPubSub[C, V]) C() C {
 // MUST be promptly cancelled, to avoid leaking resources, and/or potentially
 // causing a deadlock.
 func (x *ChanPubSub[C, V]) SubscribeContext(ctx context.Context) iter.Seq[V] {
-	x.check()
-	x.Add(1)
-	unsubscribe := x.unsubscribe() // N.B. add(-1) guarded by sync.Once
+	x.Subscribe() // N.B. handles guarding on check* functions
+
+	// support nil (consistency - not best practice, but this pkg tends to)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	stop := context.AfterFunc(ctx, unsubscribe)
+
+	// For if we never call the iterator. Also used to handle multiple calls.
+	stop := context.AfterFunc(ctx, x.Unsubscribe)
+
 	return func(yield func(V) bool) {
-		defer unsubscribe()
+		if yield == nil {
+			// ensure we unsubscribe on all code paths
+			if stop() {
+				x.Unsubscribe()
+			}
+			panic(`bigbuff: chanpubsub: iterator yield func is nil`)
+		}
 
 		if !stop() {
 			// Context was cancelled, or called more than once.
@@ -122,9 +132,10 @@ func (x *ChanPubSub[C, V]) SubscribeContext(ctx context.Context) iter.Seq[V] {
 			return
 		}
 
-		if yield == nil {
-			panic(`bigbuff: chanpubsub: yield is nil`)
-		}
+		// always unsubscribe, exactly once, or never, if the context is never
+		// canceled, AND the iterator is either never called, or is called at
+		// least once, and the (single) call to get past stop() never completes
+		defer x.Unsubscribe()
 
 		for {
 			select {
@@ -161,7 +172,8 @@ func (x *ChanPubSub[C, V]) SubscribeContext(ctx context.Context) iter.Seq[V] {
 // deadlock, so long as subscribers obey the contract, as documented on
 // [ChanPubSub].
 func (x *ChanPubSub[C, V]) Send(value V) (sent int) {
-	x.check()
+	x.checkUsedFactoryFunction()
+	x.checkBroken()
 
 	if x.subscribers.Load() == 0 {
 		return 0 // no subscribers (fast path)
@@ -180,7 +192,7 @@ func (x *ChanPubSub[C, V]) Send(value V) (sent int) {
 		}
 	}()
 
-	x.check() // again (attempt to mitigate deadlocks caused by borked state)
+	x.checkBroken() // again (attempt to mitigate deadlocks caused by borked state)
 
 	// we need to know the subscribers, so we can add to x.ping
 	// synchronisation is important here, so INCREMENTS are mutually exclusive
@@ -214,7 +226,7 @@ func (x *ChanPubSub[C, V]) Send(value V) (sent int) {
 		x.pongC.L.Lock()
 		defer x.pongC.L.Unlock()
 
-		x.check() // AFTER lock (broken state is only broadcast once)
+		x.checkBroken() // AFTER lock (broken state is only broadcast once)
 
 		x.pongN = sent
 		x.pongC.Broadcast() // wake up any blocking Wait calls
@@ -222,7 +234,7 @@ func (x *ChanPubSub[C, V]) Send(value V) (sent int) {
 		// wait for our pongs to be consumed
 		for x.pongN != 0 {
 			x.pongC.Wait()
-			x.check() // ALWAYS check after a wait
+			x.checkBroken() // ALWAYS checkBroken after a wait
 		}
 	}
 
@@ -243,7 +255,8 @@ func (x *ChanPubSub[C, V]) Add(delta int) (subscribers int) {
 		panic(`bigbuff: chanpubsub: delta out of bounds`)
 	}
 
-	x.check()
+	x.checkUsedFactoryFunction()
+	x.checkBroken()
 
 	switch {
 	case delta == 0:
@@ -285,7 +298,7 @@ func (x *ChanPubSub[C, V]) Add(delta int) (subscribers int) {
 		ok := x.sendingMu.TryRLock()
 		// N.B. this loop is to handle state transition (send in progress)
 		for !ok && x.ping.Add(0) == 0 {
-			x.check() // attempts to mitigate deadlock risk on misuse...
+			x.checkBroken() // attempts to mitigate deadlock risk on misuse...
 			ok = x.sendingMu.TryRLock()
 		}
 		subscribers = x.addSubscribers(delta)
@@ -323,15 +336,17 @@ func (x *ChanPubSub[C, V]) Add(delta int) (subscribers int) {
 // the sender, for the purpose of ensuring that all messages are broadcast, to
 // all subscribers.
 func (x *ChanPubSub[C, V]) Wait() {
+	x.checkUsedFactoryFunction()
+
 	x.pongC.L.Lock()
 	defer x.pongC.L.Unlock()
 
-	x.check() // AFTER lock (broken state is only broadcast once)
+	x.checkBroken() // AFTER lock (broken state is only broadcast once)
 
 	// wait for a pong to consume
 	for x.pongN == 0 {
 		x.pongC.Wait()
-		x.check() // ALWAYS check after a wait
+		x.checkBroken() // ALWAYS checkBroken after a wait
 	}
 
 	x.pongN-- // consume a pong
@@ -341,17 +356,30 @@ func (x *ChanPubSub[C, V]) Wait() {
 	}
 }
 
-// check panics if the receiver is in a broken state, indicating misuse.
+// Subscribe is an alias for calling [ChanPubSub.Add] with a delta of 1.
+func (x *ChanPubSub[C, V]) Subscribe() {
+	x.Add(1)
+}
+
+// Unsubscribe is an alias for calling [ChanPubSub.Add] with a delta of -1.
+func (x *ChanPubSub[C, V]) Unsubscribe() {
+	x.Add(-1)
+}
+
+// checkBroken panics if the receiver is in a broken state, indicating misuse.
 // Called as part of all public methods, as a mitigation to reduce the risk of
 // deadlocks, brought about by undefined behavior, caused by API misuse.
-func (x *ChanPubSub[C, V]) check() {
-	if x.broken == nil {
-		panic(`bigbuff: chanpubsub: must use factory function`)
-	}
+func (x *ChanPubSub[C, V]) checkBroken() {
 	select {
 	case <-x.broken:
 		panic(chanPubSubStateInvariantViolation)
 	default:
+	}
+}
+
+func (x *ChanPubSub[C, V]) checkUsedFactoryFunction() {
+	if x.broken == nil {
+		panic(`bigbuff: chanpubsub: must use factory function`)
 	}
 }
 
@@ -392,17 +420,6 @@ func (x *ChanPubSub[C, V]) sanityCheckSubscribersDelta(subscribers, delta int) {
 	if oldSubscribers < 0 {
 		x.markBroken()
 		panic(`bigbuff: chanpubsub: negative old subscribers`)
-	}
-}
-
-// unsubscribe returns a closure that decrements the number of subscribers,
-// with an instance of [sync.Once] to ensure it is applied at most once.
-func (x *ChanPubSub[C, V]) unsubscribe() func() {
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			x.Add(-1)
-		})
 	}
 }
 
