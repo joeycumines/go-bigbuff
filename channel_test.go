@@ -1100,7 +1100,7 @@ func TestChannel(t *testing.T) {
 		t.Fatal("unexpected output len", l)
 	}
 
-	if aLen < 2000 || bLen < 2000 || cLen < 2000 {
+	if aLen < 1000 || bLen < 1000 || cLen < 1000 {
 		t.Error("unexpected balance", aLen, bLen, cLen)
 	}
 

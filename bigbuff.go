@@ -37,32 +37,46 @@ const (
 )
 
 type (
-	// Producer models a producer in a producer-consumer pattern, where the resource will be closed at most once.
-	Producer interface {
+	// Producer is an untyped [Sink], accepting values of type any.
+	Producer = Sink[any]
+
+	// Consumer is an untyped [Source], retrieving values of type any.
+	Consumer = Source[any]
+
+	// Puter is the core simple producer interface utilized by this package.
+	Puter[T any] interface {
+		// Put will send the provided values in-order to the message buffer, or return an error.
+		// It MUST NOT block in such a way that it will be possible to cause a deadlock locally.
+		Put(ctx context.Context, values ...T) error
+	}
+
+	// Getter is the core simple consumer interface utilized by this package.
+	Getter[T any] interface {
+		// Get will get a message from the message buffer, at the current offset, blocking if none are available, or
+		// an error if it fails.
+		Get(ctx context.Context) (T, error)
+	}
+
+	// Sink models a producer in a producer-consumer pattern, where the resource will be closed at most once.
+	Sink[T any] interface {
 		io.Closer
+		Puter[T]
 
 		// Done should return a channel that will be closed after internal resources have been freed, after a `Close`
 		// call, which may not be explicit.  This *may* mean that it blocks on any pending changes, and it *may* also
 		// be possible that the consumer will be closed due to external reasons, e.g. connection closing.
 		Done() <-chan struct{}
-
-		// Put will send the provided values in-order to the message buffer, or return an error.
-		// It MUST NOT block in such a way that it will be possible to cause a deadlock locally.
-		Put(ctx context.Context, values ...interface{}) error
 	}
 
-	// Consumer models a consumer in a producer-consumer pattern, where the resource will be closed at most once.
-	Consumer interface {
+	// Source models a consumer in a producer-consumer pattern, where the resource will be closed at most once.
+	Source[T any] interface {
 		io.Closer
+		Getter[T]
 
 		// Done should return a channel that will be closed after internal resources have been freed, after a `Close`
 		// call, which may not be explicit. This *may* mean that it blocks on any pending changes, and it *may* also
 		// be possible that the consumer will be closed due to external reasons, e.g. connection closing.
 		Done() <-chan struct{}
-
-		// Get will get a message from the message buffer, at the current offset, blocking if none are available, or
-		// an error if it fails.
-		Get(ctx context.Context) (interface{}, error)
 
 		// Commit will save any offset changes, and will return an error if it fails, or if the offset saved is the
 		// latest.
