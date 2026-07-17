@@ -102,7 +102,7 @@ type (
 		ctx       context.Context    // ctx is used to free dependant resources
 		cancel    context.CancelFunc // cancel closes context
 		consumers map[*consumer]int  // consumers maps all open consumers to their COMMITTED offsets (self-removing)
-		buffer    []interface{}      // buffer is the internal buffer
+		buffer    []any              // buffer is the internal buffer
 		offset    int                // offset increments with each message removed from the buffer
 		cleaner   *CleanerConfig     // cleaner is used to configure the logic to maintain the buffer's size
 	}
@@ -138,7 +138,7 @@ type (
 		mutex    sync.Mutex         // mutex synchronises the (rollback) buffer, blocked count, and closes
 		valid    bool               // valid is set when correctly instanced via NewChannel
 		source   reflect.Value      // source is the input channel
-		buffer   []interface{}      // buffer is anything received not committed yet (Channel.Buffer() returns it)
+		buffer   []any              // buffer is anything received not committed yet (Channel.Buffer() returns it)
 		ctx      context.Context    // ctx manages "close state" (not actual channel close)
 		cancel   context.CancelFunc // cancel is used to close the Channel
 		close    sync.Once          // close once :)
@@ -163,9 +163,9 @@ type (
 	producer interface {
 		delete(c *consumer)
 		getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-			Value interface{}
+			Value any
 			Error error
-		}, interface{}, error)
+		}, any, error)
 		commit(c *consumer, offset int) error
 	}
 
@@ -177,18 +177,18 @@ type (
 	// a given key a grace period to be grouped with the remaining keys.
 	Exclusive struct {
 		mutex sync.Mutex
-		work  map[interface{}]*exclusiveItem
+		work  map[any]*exclusiveItem
 	}
 
 	// WorkFunc is a work function, as used by Exclusive.
-	WorkFunc func(resolve func(result interface{}, err error))
+	WorkFunc func(resolve func(result any, err error))
 
 	// ExclusiveOption passes configuration into Exclusive.CallWithOptions, see also package functions prefixed with
 	// Exclusive, such as ExclusiveKey and ExclusiveWork.
 	ExclusiveOption func(c *exclusiveConfig)
 
 	exclusiveConfig struct {
-		key      interface{}
+		key      any
 		work     WorkFunc
 		wait     time.Duration
 		start    bool
@@ -197,7 +197,7 @@ type (
 
 	// ExclusiveOutcome is the return value from an async bigbuff.Exclusive call
 	ExclusiveOutcome struct {
-		Result interface{}
+		Result any
 		Error  error
 	}
 
@@ -210,7 +210,7 @@ type (
 		running  bool
 		complete bool
 		count    int
-		result   interface{}
+		result   any
 		err      error
 	}
 
@@ -222,9 +222,9 @@ type (
 		count  int
 		target int
 		queue  []*struct {
-			value  func() (interface{}, error)
+			value  func() (any, error)
 			output chan<- struct {
-				result interface{}
+				result any
 				error  error
 			}
 		}
@@ -248,7 +248,7 @@ type (
 	// Note that it uses reflect internally, to avoid clients needing to rely on generic interface values.
 	Notifier struct {
 		mutex       sync.RWMutex
-		subscribers map[interface{}]map[uintptr]notifierSubscriber
+		subscribers map[any]map[uintptr]notifierSubscriber
 	}
 
 	notifierSubscriber struct {
@@ -319,7 +319,7 @@ func FixedBufferCleaner(
 // by panics, note that the index will be the index in THIS range, starting at 0, and incrementing by one with each
 // call to fn.
 // NOTE: the ctx value will be passed into the consumer.Get as-is.
-func Range(ctx context.Context, consumer Consumer, fn func(index int, value interface{}) bool) (err error) {
+func Range(ctx context.Context, consumer Consumer, fn func(index int, value any) bool) (err error) {
 	if consumer == nil {
 		err = errors.New("bigbuff.Range requires non-nil consumer")
 		return
@@ -346,7 +346,7 @@ func Range(ctx context.Context, consumer Consumer, fn func(index int, value inte
 				}
 			}()
 
-			var value interface{}
+			var value any
 			value, err = consumer.Get(ctx)
 			if err != nil {
 				return
@@ -404,14 +404,14 @@ func isFatalError(err error) bool {
 // any remainder of a given duration, is intended to make it trivial to build a debounced rate limited partitioned
 // worker implementation.
 // NOTE a panic will occur if the duration d is not greater than 0, or if the function fn is nil.
-func MinDuration(d time.Duration, fn func() (interface{}, error)) func() (interface{}, error) {
+func MinDuration(d time.Duration, fn func() (any, error)) func() (any, error) {
 	if d <= 0 {
 		panic(fmt.Errorf("bigbuff.MinDuration invalid duration: %s", d.String()))
 	}
 	if fn == nil {
 		panic(fmt.Errorf("bigbuff.MinDuration nil function"))
 	}
-	return func() (value interface{}, err error) {
+	return func() (value any, err error) {
 		startedAt := time.Now()
 		value, err = fn()
 		time.Sleep(startedAt.Add(d).Sub(time.Now()))

@@ -61,7 +61,7 @@ const chanPubSubStateInvariantViolation = `bigbuff: chanpubsub: state invariant 
 //     in which case they MUST promptly unsubscribe. Subscribers MAY use the
 //     channel in a select statement, to trigger unsubscribe, as an example.
 //     After unsubscribing, values MUST NOT be received, from the channel.
-type ChanPubSub[C chan V, V any] struct {
+type ChanPubSub[C ~chan V, V any] struct {
 	// ping is used to orchestrate sends.
 	ping ChanCaster[C, V]
 	// pongC is used to orchestrate waits.
@@ -86,11 +86,12 @@ type ChanPubSub[C chan V, V any] struct {
 }
 
 // NewChanPubSub constructs a new instance of [ChanPubSub], using the provided
-// channel as the underlying transport. The channel MUST be non-nil and have a
-// capacity of zero (cannot be buffered).
-func NewChanPubSub[C chan V, V any](c C) *ChanPubSub[C, V] {
-	if c == nil || cap(c) != 0 {
-		panic(`bigbuff: chanpubsub: must use a non-nil channel without buffer`)
+// channel as the underlying transport. The channel must be unbuffered
+// (cap == 0). A nil channel is permitted. It panics if the channel is
+// buffered.
+func NewChanPubSub[C ~chan V, V any](c C) *ChanPubSub[C, V] {
+	if cap(c) != 0 {
+		panic(`bigbuff: chanpubsub: must use an unbuffered channel`)
 	}
 	var x ChanPubSub[C, V]
 	x.ping.C = c

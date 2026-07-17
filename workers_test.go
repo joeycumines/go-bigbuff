@@ -54,11 +54,11 @@ func TestWorkers_Call(t *testing.T) {
 	}
 	w.mutex.Unlock()
 
-	for x := 0; x < 10000; x++ {
+	for range 10000 {
 		go func() {
 			value, err := w.Call(
 				20,
-				func() (interface{}, error) {
+				func() (any, error) {
 					s := time.Millisecond * 200
 					m.Lock()
 					c++
@@ -98,7 +98,7 @@ func TestWorkers_Call(t *testing.T) {
 	go func() {
 		value, err := w.Call(
 			12,
-			func() (interface{}, error) {
+			func() (any, error) {
 				s := time.Millisecond * 200
 				m.Lock()
 				c++
@@ -138,7 +138,7 @@ func TestWorkers_Call(t *testing.T) {
 	go func() {
 		value, err := w.Wrap(
 			100,
-			func() (interface{}, error) {
+			func() (any, error) {
 				s := time.Millisecond * 200
 				m.Lock()
 				c++

@@ -35,7 +35,7 @@ func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
 
 	pairs := make([]struct {
 		Index int
-		Value interface{}
+		Value any
 	}, 0)
 
 	b.Put(nil, -1, -2, -3)
@@ -54,10 +54,10 @@ func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
 		time.Sleep(time.Millisecond * 40)
 	}()
 
-	if err := Range(nil, c, func(index int, value interface{}) bool {
+	if err := Range(nil, c, func(index int, value any) bool {
 		pairs = append(pairs, struct {
 			Index int
-			Value interface{}
+			Value any
 		}{
 			Index: index,
 			Value: value,
@@ -79,7 +79,7 @@ func TestRange_oneConsumerSuccessCleanup(t *testing.T) {
 
 	if diff := deep.Equal([]struct {
 		Index int
-		Value interface{}
+		Value any
 	}{
 		{
 			Index: 0,
@@ -213,7 +213,7 @@ func TestFixedBufferCleaner(t *testing.T) {
 	default:
 	}
 
-	if diff := deep.Equal(buffer.Slice(), []interface{}{1, 2, 3}); diff != nil {
+	if diff := deep.Equal(buffer.Slice(), []any{1, 2, 3}); diff != nil {
 		t.Fatal(diff)
 	}
 
@@ -237,7 +237,7 @@ func TestFixedBufferCleaner(t *testing.T) {
 	}
 	time.Sleep(time.Millisecond * 30)
 
-	if diff := deep.Equal(buffer.Slice(), []interface{}{4}); diff != nil {
+	if diff := deep.Equal(buffer.Slice(), []any{4}); diff != nil {
 		t.Fatal(diff)
 	}
 
@@ -303,7 +303,7 @@ func TestFixedBufferCleaner_nil(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Millisecond * 30)
-	if diff := deep.Equal(buffer.Slice(), []interface{}{1, 2, 3}); diff != nil {
+	if diff := deep.Equal(buffer.Slice(), []any{1, 2, 3}); diff != nil {
 		t.Fatal(diff)
 	}
 
@@ -312,7 +312,7 @@ func TestFixedBufferCleaner_nil(t *testing.T) {
 	}
 	time.Sleep(time.Millisecond * 50)
 
-	if diff := deep.Equal(buffer.Slice(), []interface{}{4}); diff != nil {
+	if diff := deep.Equal(buffer.Slice(), []any{4}); diff != nil {
 		t.Fatal(diff)
 	}
 
@@ -335,7 +335,7 @@ func TestBuffer_Range_empty(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	err = buffer.Range(nil, c, func(index int, value interface{}) bool {
+	err = buffer.Range(nil, c, func(index int, value any) bool {
 		t.Error("should not have been reached")
 		return true
 	})
@@ -359,7 +359,7 @@ func TestBuffer_Range_one(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls int
-	err = buffer.Range(nil, c, func(index int, value interface{}) bool {
+	err = buffer.Range(nil, c, func(index int, value any) bool {
 		if index != 0 || value != -121 {
 			t.Error("unexpected range", index, value)
 		}
@@ -401,7 +401,7 @@ func TestMinDuration_panicZero(t *testing.T) {
 			t.Error(r)
 		}
 	}()
-	MinDuration(0, func() (i interface{}, e error) { return })
+	MinDuration(0, func() (i any, e error) { return })
 	t.Error(`expected panic`)
 }
 
@@ -421,15 +421,15 @@ func TestMinDuration(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	var (
-		r  = func() (interface{}, error) { return nil, nil }
-		fn = func() func() (time.Duration, interface{}, error) {
+		r  = func() (any, error) { return nil, nil }
+		fn = func() func() (time.Duration, any, error) {
 			fn := MinDuration(
 				time.Millisecond*100,
-				func() (interface{}, error) {
+				func() (any, error) {
 					return r()
 				},
 			)
-			return func() (d time.Duration, v interface{}, e error) {
+			return func() (d time.Duration, v any, e error) {
 				t := time.Now()
 				v, e = fn()
 				d = time.Now().Sub(t)
@@ -447,7 +447,7 @@ func TestMinDuration(t *testing.T) {
 	if d, v, e := fn(); diff(d, time.Millisecond*100) > time.Millisecond*50 || v != nil || e != nil {
 		t.Error(d, v, e)
 	}
-	r = func() (interface{}, error) { time.Sleep(time.Millisecond * 200); return 512, errors.New(`some_error`) }
+	r = func() (any, error) { time.Sleep(time.Millisecond * 200); return 512, errors.New(`some_error`) }
 	if d, v, e := fn(); diff(d, time.Millisecond*200) > time.Millisecond*50 || v != 512 || e == nil || e.Error() != `some_error` {
 		t.Error(d, v, e)
 	}
@@ -456,7 +456,7 @@ func TestMinDuration(t *testing.T) {
 func TestRange_nilConsumer(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	if err := Range(context.Background(), nil, func(index int, value interface{}) bool { panic(`unexpected`) }); err == nil {
+	if err := Range(context.Background(), nil, func(index int, value any) bool { panic(`unexpected`) }); err == nil {
 		t.Error(err)
 	}
 }
@@ -474,7 +474,7 @@ func TestRange_contextGuard(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Range(ctx, struct{ Consumer }{}, func(index int, value interface{}) bool { panic(`unexpected`) }); err != context.Canceled {
+	if err := Range(ctx, struct{ Consumer }{}, func(index int, value any) bool { panic(`unexpected`) }); err != context.Canceled {
 		t.Error(err)
 	}
 }
@@ -494,7 +494,7 @@ func TestRange_getPanic(t *testing.T) {
 		}
 	}()
 	_ = Range(ctx, mockConsumer{
-		get: func(c context.Context) (interface{}, error) {
+		get: func(c context.Context) (any, error) {
 			if c != ctx {
 				t.Error(c, ctx)
 			}
@@ -504,7 +504,7 @@ func TestRange_getPanic(t *testing.T) {
 			rollback++
 			return nil
 		},
-	}, func(index int, value interface{}) bool { panic(`unexpected`) })
+	}, func(index int, value any) bool { panic(`unexpected`) })
 }
 
 func TestRange_getNilContext(t *testing.T) {
@@ -521,7 +521,7 @@ func TestRange_getNilContext(t *testing.T) {
 		}
 	}()
 	_ = Range(nil, mockConsumer{
-		get: func(c context.Context) (interface{}, error) {
+		get: func(c context.Context) (any, error) {
 			if c != nil {
 				t.Error(c)
 			}
@@ -531,7 +531,7 @@ func TestRange_getNilContext(t *testing.T) {
 			rollback++
 			return nil
 		},
-	}, func(index int, value interface{}) bool { panic(`unexpected`) })
+	}, func(index int, value any) bool { panic(`unexpected`) })
 }
 
 func TestRange_rollback(t *testing.T) {
@@ -548,7 +548,7 @@ func TestRange_rollback(t *testing.T) {
 		actual        = Range(
 			ctx,
 			mockConsumer{
-				get: func(c context.Context) (interface{}, error) {
+				get: func(c context.Context) (any, error) {
 					if last != `` {
 						t.Error(last)
 					}
@@ -576,7 +576,7 @@ func TestRange_rollback(t *testing.T) {
 					return expected
 				},
 			},
-			func(index int, value interface{}) bool {
+			func(index int, value any) bool {
 				if last != `get` {
 					t.Error(last)
 				}
@@ -614,12 +614,12 @@ func TestRange_rollback(t *testing.T) {
 
 type mockConsumer struct {
 	Consumer
-	get      func(ctx context.Context) (interface{}, error)
+	get      func(ctx context.Context) (any, error)
 	commit   func() error
 	rollback func() error
 }
 
-func (m mockConsumer) Get(ctx context.Context) (interface{}, error) {
+func (m mockConsumer) Get(ctx context.Context) (any, error) {
 	if m.get != nil {
 		return m.get(ctx)
 	}
@@ -665,7 +665,7 @@ func TestRange_commitErrorHandling(t *testing.T) {
 			}
 			return consumer.Commit()
 		},
-	}, func(index int, value interface{}) bool {
+	}, func(index int, value any) bool {
 		output += value.(string)
 		return true
 	}); err != expected {

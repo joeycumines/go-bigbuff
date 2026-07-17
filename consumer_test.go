@@ -28,9 +28,9 @@ import (
 type mockProducer struct {
 	_delete   func(c *consumer)
 	_getAsync func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-		Value interface{}
+		Value any
 		Error error
-	}, interface{}, error)
+	}, any, error)
 	_commit func(c *consumer, offset int) error
 }
 
@@ -43,9 +43,9 @@ func (p *mockProducer) delete(c *consumer) {
 }
 
 func (p *mockProducer) getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-	Value interface{}
+	Value any
 	Error error
-}, interface{}, error) {
+}, any, error) {
 	if p._getAsync != nil {
 		return p._getAsync(ctx, c, offset, cancels...)
 	}
@@ -210,9 +210,9 @@ func TestConsumer_Get_syncError(t *testing.T) {
 		ctx: context.Background(),
 		producer: &mockProducer{
 			_getAsync: func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-				Value interface{}
+				Value any
 				Error error
-			}, interface{}, error) {
+			}, any, error) {
 				return nil, 123, errors.New("some_error")
 			},
 		},
@@ -240,9 +240,9 @@ func TestConsumer_Get_syncSuccess(t *testing.T) {
 		ctx: context.Background(),
 		producer: &mockProducer{
 			_getAsync: func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-				Value interface{}
+				Value any
 				Error error
-			}, interface{}, error) {
+			}, any, error) {
 				return nil, 123, nil
 			},
 		},
@@ -281,7 +281,7 @@ func TestConsumer_Get_asyncSuccess(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	z := make(chan struct {
-		Value interface{}
+		Value any
 		Error error
 	})
 
@@ -289,9 +289,9 @@ func TestConsumer_Get_asyncSuccess(t *testing.T) {
 		ctx: context.Background(),
 		producer: &mockProducer{
 			_getAsync: func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-				Value interface{}
+				Value any
 				Error error
-			}, interface{}, error) {
+			}, any, error) {
 				return z, -1, nil
 			},
 		},
@@ -312,7 +312,7 @@ func TestConsumer_Get_asyncSuccess(t *testing.T) {
 	go func() {
 		time.Sleep(time.Millisecond * 20)
 		z <- struct {
-			Value interface{}
+			Value any
 			Error error
 		}{
 			Value: 123,
@@ -340,7 +340,7 @@ func TestConsumer_Get_asyncError(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	z := make(chan struct {
-		Value interface{}
+		Value any
 		Error error
 	})
 
@@ -348,9 +348,9 @@ func TestConsumer_Get_asyncError(t *testing.T) {
 		ctx: context.Background(),
 		producer: &mockProducer{
 			_getAsync: func(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-				Value interface{}
+				Value any
 				Error error
-			}, interface{}, error) {
+			}, any, error) {
 				return z, -1, nil
 			},
 		},
@@ -359,7 +359,7 @@ func TestConsumer_Get_asyncError(t *testing.T) {
 	go func() {
 		time.Sleep(time.Millisecond * 20)
 		z <- struct {
-			Value interface{}
+			Value any
 			Error error
 		}{
 			Error: errors.New("some_error"),

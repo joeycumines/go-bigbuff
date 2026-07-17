@@ -111,7 +111,7 @@ func TestExponentialRetry_success(t *testing.T) {
 	result, err := ExponentialRetry(
 		eCtx,
 		rate,
-		func() (interface{}, error) {
+		func() (any, error) {
 			count++
 			events = append(events, Event{
 				Name:     `call`,
@@ -199,7 +199,7 @@ func TestExponentialRetry_cancelled(t *testing.T) {
 	result, err := ExponentialRetry(
 		ctx,
 		0,
-		func() (interface{}, error) {
+		func() (any, error) {
 			t.Error("bad")
 			panic("unexpected")
 		},
@@ -245,7 +245,7 @@ func TestExponentialRetry_fatal(t *testing.T) {
 	result, err := ExponentialRetry(
 		nil,
 		0,
-		func() (interface{}, error) {
+		func() (any, error) {
 			return "val", FatalError(FatalError(FatalError(e)))
 		},
 	)()

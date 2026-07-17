@@ -79,7 +79,7 @@ func ExampleChanPubSub_SubscribeContext() {
 		fmt.Printf("subscriber %d received %d messages\n", i, n)
 	}
 
-	//output:
+	// Output:
 	//send result without subscribers: 0
 	//subscriber received: 0
 	//subscriber received: 0
@@ -111,7 +111,7 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 
 	var count int32
 
-	for i := 0; i < numReceivers; i++ {
+	for range numReceivers {
 		go func() {
 			defer allStopped.Done()
 			for {
@@ -162,7 +162,7 @@ func BenchmarkChanPubSub_SubscribeContext_highContention(b *testing.B) {
 
 	var count int32
 
-	for i := 0; i < numReceivers; i++ {
+	for range numReceivers {
 		iter := c.SubscribeContext(ctx)
 		go func() {
 			defer allStopped.Done()
@@ -211,7 +211,7 @@ func TestChanPubSub_basicSendReceive(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sent := c.Send(i)
 			if sent != 1 {
 				t.Errorf("expected 1 subscriber, got %d", sent)
@@ -270,7 +270,7 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 
 	var wg sync.WaitGroup
 	results := make([][]int, numSubscribers)
-	for i := 0; i < numSubscribers; i++ {
+	for i := range numSubscribers {
 		wg.Add(1)
 
 		seq := c.SubscribeContext(context.Background())
@@ -290,7 +290,7 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < totalSends; i++ {
+		for i := range totalSends {
 			sent := c.Send(i)
 			if sent != numSubscribers {
 				t.Errorf("expected %d subscribers, got %d", numSubscribers, sent)
@@ -303,7 +303,7 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 	wg.Wait()
 
 	// All subscribers should have the same sequence
-	for i := 0; i < numSubscribers; i++ {
+	for i := range numSubscribers {
 		if len(results[i]) != totalSends {
 			t.Errorf("subscriber %d got %d items, expected %d", i, len(results[i]), totalSends)
 		}
@@ -353,7 +353,7 @@ func TestChanPubSub_unsubscribeEarly(t *testing.T) {
 	}()
 
 	// Send 5 items
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		sent := c.Send(i)
 		// For the first 3 sends, we expect 2 subscribers.
 		// After subscriber2 unsubscribes, we expect just 1.
@@ -403,7 +403,7 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 	defer cancel()
 
 	// Start some subscribers that randomly unsubscribe
-	for i := 0; i < totalGoroutines; i++ {
+	for range totalGoroutines {
 		seq := c.SubscribeContext(ctx)
 		wg.Add(1)
 		go func() {
@@ -428,11 +428,11 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 	}
 
 	// Start some senders
-	for i := 0; i < totalGoroutines; i++ {
+	for range totalGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < sendsPerGoroutine; j++ {
+			for j := range sendsPerGoroutine {
 				c.Send(j)
 				time.Sleep(time.Millisecond * 1)
 				mu.Lock()
@@ -471,17 +471,105 @@ func TestChanPubSub_panicWhenChannelBuffered(t *testing.T) {
 		r := recover()
 		if r == nil {
 			t.Error("expected panic when using a buffered channel, got none")
-		} else {
-			s := r.(string)
-			if s != `bigbuff: chanpubsub: must use a non-nil channel without buffer` {
-				t.Errorf("unexpected panic string: %s", s)
-			}
+		} else if s := fmt.Sprint(r); s != `bigbuff: chanpubsub: must use an unbuffered channel` {
+			t.Errorf("unexpected panic string: %s", s)
 		}
 	}()
 	_ = NewChanPubSub(make(chan int, 1)) // Should panic
 }
 
-func mustPanic(t *testing.T, fn func()) (panicValue interface{}) {
+// TestChanPubSub_nilChannel verifies that a ChanPubSub constructed with a nil
+// channel is usable as normal — Send returns 0 (no subscribers), Add manages
+// state correctly, C() returns nil (usable in selects), and SubscribeContext
+// blocks until context cancellation (nil channel case never fires).
+func TestChanPubSub_nilChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	// Construction with a nil channel must NOT panic
+	c := NewChanPubSub((chan int)(nil))
+
+	// C() returns nil
+	if ch := c.C(); ch != nil {
+		t.Error("expected C() to return nil")
+	}
+
+	// Send with no subscribers returns 0
+	if n := c.Send(42); n != 0 {
+		t.Errorf("expected 0 sends, got %d", n)
+	}
+
+	// Add(0) returns 0
+	if n := c.Add(0); n != 0 {
+		t.Errorf("expected 0 subscribers, got %d", n)
+	}
+
+	// Add(1) then Add(-1) works
+	c.Add(1)
+	if n := c.Add(0); n != 1 {
+		t.Errorf("expected 1 subscriber, got %d", n)
+	}
+	c.Add(-1)
+	if n := c.Add(0); n != 0 {
+		t.Errorf("expected 0 subscribers after add/remove, got %d", n)
+	}
+
+	// Send still returns 0
+	if n := c.Send(99); n != 0 {
+		t.Errorf("expected 0 sends, got %d", n)
+	}
+
+	// Nil channel never fires in a select — other cases work normally
+	other := make(chan int, 1)
+	other <- 456
+	select {
+	case <-c.C():
+		t.Error("expected nil channel case to never fire")
+	case v := <-other:
+		if v != 456 {
+			t.Errorf("expected 456, got %d", v)
+		}
+	}
+
+	// SubscribeContext with a cancellable context: the iterator blocks
+	// (nil channel never yields), then returns when the context is cancelled.
+	ctx, cancel := context.WithCancel(context.Background())
+	iter := c.SubscribeContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		iter(func(v int) bool {
+			t.Errorf("expected no values from nil channel, got %d", v)
+			return true
+		})
+	}()
+
+	// Give the iterator a moment to start, then verify it's blocked
+	time.Sleep(time.Millisecond * 20)
+	select {
+	case <-done:
+		t.Fatal("expected iterator to block on nil channel")
+	default:
+		// expected — iterator is blocked
+	}
+
+	// Cancel should stop the iterator
+	cancel()
+
+	select {
+	case <-done:
+		// expected — iterator returned after cancellation
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for iterator to stop after cancel")
+	}
+
+	// After the iterator returns, subscriber count should be back to 0
+	if n := c.Add(0); n != 0 {
+		t.Errorf("expected 0 subscribers after iterator cleanup, got %d", n)
+	}
+}
+
+func mustPanic(t *testing.T, fn func()) (panicValue any) {
 	t.Helper()
 	defer func() {
 		panicValue = recover()
@@ -782,7 +870,7 @@ func TestChanPubSub_highContention(t *testing.T) {
 
 	var crashHook atomic.Pointer[func()]
 
-	die := func(s string, v ...interface{}) {
+	die := func(s string, v ...any) {
 		t.Helper()
 		msg := fmt.Sprintf(s, v...)
 		if !t.Failed() {

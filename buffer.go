@@ -61,7 +61,7 @@ func (b *Buffer) Done() <-chan struct{} {
 	return b.done
 }
 
-func (b *Buffer) Put(ctx context.Context, values ...interface{}) error {
+func (b *Buffer) Put(ctx context.Context, values ...any) error {
 	b.ensure()
 
 	if ctx != nil {
@@ -117,7 +117,7 @@ func (b *Buffer) NewConsumer() (Consumer, error) {
 
 // Slice returns a copy of the internal message buffer (all currently stored in memory).
 // NOTE: this will read-lock the buffer itself, and is accessible even after the buffer is closed.
-func (b *Buffer) Slice() []interface{} {
+func (b *Buffer) Slice() []any {
 	b.ensure()
 
 	b.mutex.RLock()
@@ -127,7 +127,7 @@ func (b *Buffer) Slice() []interface{} {
 		return nil
 	}
 
-	result := make([]interface{}, len(b.buffer))
+	result := make([]any, len(b.buffer))
 	copy(result, b.buffer)
 
 	return result
@@ -209,7 +209,7 @@ func (b *Buffer) Diff(c Consumer) (int, bool) {
 
 // Range provides a way to iterate from the start to the end of the buffer, note that it will exit as soon as it
 // reaches the end of the buffer (unlike ranging on a channel), it simply utilizes the package Range + Buffer.Diff.
-func (b *Buffer) Range(ctx context.Context, c Consumer, fn func(index int, value interface{}) bool) error {
+func (b *Buffer) Range(ctx context.Context, c Consumer, fn func(index int, value any) bool) error {
 	b.ensure()
 
 	if cm, ok := c.(*consumer); !ok || cm == nil || cm.producer != b {
@@ -227,7 +227,7 @@ func (b *Buffer) Range(ctx context.Context, c Consumer, fn func(index int, value
 	return Range(
 		ctx,
 		c,
-		func(index int, value interface{}) bool {
+		func(index int, value any) bool {
 			if !fn(index, value) {
 				return false
 			}
@@ -273,7 +273,7 @@ func (b *Buffer) commit(c *consumer, offset int) error {
 
 // get attempts to get a value, by a consumer, with it's internal offset (which is an ADJUSTMENT to the consumer's
 // actual offset) returning false if not yet available, and error if not possible, note this method does not lock
-func (b *Buffer) get(c *consumer, offset int) (interface{}, bool, error) {
+func (b *Buffer) get(c *consumer, offset int) (any, bool, error) {
 	// check we haven't got a cancelled context
 	if err := b.ctx.Err(); err != nil {
 		return nil, false, err
@@ -311,9 +311,9 @@ func (b *Buffer) get(c *consumer, offset int) (interface{}, bool, error) {
 // Any error means error, no error and any channel means async, and nil channel and nil error means a value.
 // NOTE: if a channel is returned, it will NEVER be closed, to prevent empty reads.
 func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels ...context.Context) (<-chan struct {
-	Value interface{}
+	Value any
 	Error error
-}, interface{}, error) {
+}, any, error) {
 	// read lock for the first (sync) attempt at getting the value
 	// the async case returns a channel, so this will be released in that case
 	b.mutex.RLock()
@@ -332,7 +332,7 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 
 	// create the output channel
 	out := make(chan struct {
-		Value interface{}
+		Value any
 		Error error
 	}, 1)
 
@@ -346,7 +346,7 @@ func (b *Buffer) getAsync(ctx context.Context, c *consumer, offset int, cancels 
 		// (contexts provided as the last vararg) are open, block on changes to the buffer, running the sync get as
 		// before, until it either fails with error, or it returns true with a value.
 		var result struct {
-			Value interface{}
+			Value any
 			Error error
 		}
 		if err := WaitCond(

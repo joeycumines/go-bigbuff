@@ -21,21 +21,57 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// waitForNoWork polls until the Exclusive has no pending work items, or fails
+// the test if the bounded deadline elapses.
+//
+// A worker goroutine deletes the corresponding entry from e.work only AFTER it
+// has delivered the outcome: the result is sent on the outcome channel (in
+// resolve) before the delete. The outcome channel therefore establishes a
+// happens-before edge for the *result*, but not for the subsequent cleanup —
+// the delete is an asynchronous internal operation with no public completion
+// signal. Reading e.work once (even under e.mutex) can therefore transiently
+// observe a stale length of 1, which is a flaky failure, not a real bug.
+//
+// The worker goroutine exits shortly after the delete, so waiting for e.work
+// to become empty is a necessary condition for worker completion, but not a
+// sufficient one: a worker may still be between the delete and returning.
+// This is acceptable for test purposes because the subsequent
+// checkNumGoroutines cleanup (registered via t.Cleanup) catches any actual
+// goroutine leak. A completion channel or sync.WaitGroup would be a true
+// join, but would require modifying the production Exclusive type.
+func waitForNoWork(t *testing.T, e *Exclusive) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		e.mutex.Lock()
+		n := len(e.work)
+		e.mutex.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected no work items remaining after calls completed, got %d", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestExclusive_Call_sequential(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	e := new(Exclusive)
 
-	for x := 0; x < 5; x++ {
+	for range 5 {
 		v, err := e.Call(
 			1,
-			func() (interface{}, error) {
+			func() (any, error) {
 				return "one", errors.New("some_error")
 			},
 		)
@@ -68,10 +104,10 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	var (
 		e  = new(Exclusive)
 		in = make(chan struct {
-			V interface{}
+			V any
 			E error
 		})
-		f = func() (interface{}, error) {
+		f = func() (any, error) {
 			v := <-in
 			return v.V, v.E
 		}
@@ -116,7 +152,7 @@ func TestExclusive_Call_blocking(t *testing.T) {
 
 	v, err := e.Call(
 		"a",
-		func() (interface{}, error) {
+		func() (any, error) {
 			return 88, e1
 		},
 	)
@@ -168,7 +204,7 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	}()
 
 	in <- struct {
-		V interface{}
+		V any
 		E error
 	}{
 		V: v1,
@@ -209,7 +245,7 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	}()
 
 	in <- struct {
-		V interface{}
+		V any
 		E error
 	}{
 		V: v2,
@@ -248,7 +284,7 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	}()
 
 	in <- struct {
-		V interface{}
+		V any
 		E error
 	}{
 		V: v3,
@@ -264,11 +300,9 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	for range order {
 	}
 
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	if len(e.work) != 0 {
-		t.Fatal(e)
-	}
+	// Wait for the worker goroutines to finish their asynchronous cleanup
+	// (the delete from e.work happens only after each outcome is delivered).
+	waitForNoWork(t, e)
 
 	if i1 == i2 || i1 == i3 || i2 == i3 || i1.mutex != i2.mutex || i3.mutex != i1.mutex || i1.cond != i2.cond || i3.cond != i1.cond {
 		t.Fatal(i1, i2, i3)
@@ -285,109 +319,141 @@ func TestExclusive_Call_blocking(t *testing.T) {
 	}
 }
 
+// TestExclusive_Call_concurrent verifies that Exclusive debounces concurrent
+// calls to the same key into exactly two work executions: the first call runs
+// work 1, and the remaining N-1 calls (which arrive while work 1 is running)
+// are batched into work 2.
+//
+// The previous version released all N goroutines behind a single gate and then
+// spun on nextItem.count as a "barrier". That barrier was a timing race, not a
+// synchronized counter: with ExclusiveWait=0, the first caller's worker
+// installs nextItem BEFORE running work 1 (exclusive.go:265-272, then :300).
+// Any caller that won e.mutex during the tiny window between the original-item
+// install and the nextItem install joined the *original* item, not nextItem;
+// those callers are not counted by nextItem.count, so the spin could wait
+// forever (work 1 blocks on releaseWork, closed only after the barrier — a
+// circular wait → permanent hang). The original "NOT a timing window" comment
+// was incorrect: which batch a caller lands in is precisely a timing race.
+//
+// This version removes the race deterministically:
+//  1. N=100 goroutines; the first is released alone behind gate1, the other 99
+//     behind gate2.
+//  2. The first call creates the original item; its worker sets
+//     item.running=true, creates nextItem immediately (exclusive.go:265-272),
+//     releases item.mutex, then calls the work function (exclusive.go:300).
+//  3. The work function blocks on releaseWork and signals "started". Because
+//     the started send happens AFTER the nextItem install (exclusive.go:271)
+//     in worker program order, and the channel receive in this test is a
+//     happens-before edge, observing <-started guarantees nextItem is already
+//     installed in e.work[42].
+//  4. Only now are the other 99 goroutines released (gate2). They all observe
+//     nextItem in e.work[42] and therefore join nextItem deterministically
+//     (k = 0): none can reach the original item, which is no longer in the map.
+//  5. The barrier polls nextItem.count until it reaches N-1 — now a monotonic
+//     counter that is guaranteed to arrive, with a bounded deadline so a
+//     regression fails loudly instead of hanging until the go test panic.
+//  6. close(releaseWork) completes work 1; exactly one joined caller starts
+//     work 2; the rest share its result. Expected: workCalls == 2.
+//
+// Without any debouncing it would be N (100) work executions; a broken
+// implementation batching only one pair (99 individual executions) gives
+// workCalls == 99, which fails.
 func TestExclusive_Call_concurrent(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	type Output struct {
-		Key    int
-		Start  int64
-		Finish int64
-		Actual bool
-		Index  int
-	}
-
+	const N = 100
 	var (
-		count     = 10000
-		group     = 100
-		wg        sync.WaitGroup
-		mutex     sync.Mutex
-		outputs   []Output
-		exclusive Exclusive
+		e           Exclusive
+		workCalls   int32
+		releaseWork = make(chan struct{})
+		started     = make(chan struct{}, 1)
+		wg          sync.WaitGroup
 	)
+	wg.Add(N)
 
-	wg.Add(count)
-
-	for i := 0; i < count; i++ {
-		go func(i int) {
+	// gate1 releases only the first caller; gate2 releases the remaining N-1.
+	// Splitting the release is what guarantees none of the bulk callers can
+	// join the original item (see the function doc above).
+	gate1 := make(chan struct{})
+	gate2 := make(chan struct{})
+	for i := range N {
+		go func(first bool) {
 			defer wg.Done()
-
-			output := Output{
-				Index: i,
-				Start: time.Now().UnixNano(),
-				Key:   i / group,
+			if first {
+				<-gate1
+			} else {
+				<-gate2
 			}
-
-			v, err := exclusive.Call(
-				output.Key,
-				func() (interface{}, error) {
-					ts := time.Now()
-					output.Actual = true
-					if output.Key >= count/group/2 {
-						time.Sleep(time.Millisecond * 500)
-					}
-					return ts.UnixNano(), nil
-				},
-			)
+			v, err := e.Call(42, func() (any, error) {
+				atomic.AddInt32(&workCalls, 1)
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-releaseWork
+				return "shared", nil
+			})
 			if err != nil {
 				t.Error(err)
 			}
-
-			output.Finish = v.(int64)
-
-			mutex.Lock()
-			defer mutex.Unlock()
-			outputs = append(outputs, output)
-		}(i)
+			if v != "shared" {
+				t.Errorf("expected 'shared', got %v", v)
+			}
+		}(i == 0)
 	}
 
+	// Release the first caller, which installs the original item and whose
+	// worker installs nextItem, then starts work 1 (blocking on releaseWork).
+	// The started signal is sent from the work function *after* nextItem is
+	// installed, so observing <-started guarantees nextItem is in the map.
+	close(gate1)
+
+	// Wait for the first work invocation to start (it blocks on releaseWork)
+	<-started
+
+	// Now release the remaining callers. nextItem already occupies e.work[42],
+	// so every one of them joins nextItem deterministically.
+	close(gate2)
+
+	// Barrier: poll e.work[42].count until all N-1 other calls have joined
+	// nextItem. With the two-gate release above, this is now a monotonic
+	// counter that is guaranteed to reach N-1 (all bulk callers join
+	// nextItem). It is bounded by a deadline so a regression fails loudly
+	// instead of hanging until the 10-minute go test panic. e.mutex is
+	// released before acquiring item.mutex to avoid deadlock with the
+	// production locking order (item.mutex → e.mutex).
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mutex.Lock()
+		item := e.work[42]
+		e.mutex.Unlock()
+		if item != nil {
+			item.mutex.Lock()
+			count := item.count
+			item.mutex.Unlock()
+			if count >= N-1 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("barrier timed out: expected %d joiners on nextItem, workCalls=%d", N-1, atomic.LoadInt32(&workCalls))
+		}
+		runtime.Gosched()
+	}
+
+	// All N calls have joined. Release the work.
+	close(releaseWork)
 	wg.Wait()
 
-	if len(outputs) != count {
-		t.Fatal(len(outputs), outputs)
-	}
-	exclusive.mutex.Lock()
-	if len(exclusive.work) != 0 {
-		t.Fatal(exclusive.work)
-	}
-	exclusive.mutex.Unlock()
-
-	actualCounts := make(map[int]int)
-	seenIndexes := make(map[int]int)
-
-	for _, output := range outputs {
-		key := output.Index / group
-		if output.Actual {
-			actualCounts[key]++
-		}
-		seenIndexes[output.Index]++
-		if output.Start > output.Finish {
-			t.Error(output)
-		}
+	// With ExclusiveWait=0, nextItem is created before work runs, so calls
+	// that arrive during work join nextItem. After work 1 completes, exactly
+	// one more call starts work 2 (instant), and the remaining N-2 calls
+	// share work 2's result. Total: 2 work executions for 100 calls.
+	if workCalls := atomic.LoadInt32(&workCalls); workCalls != 2 {
+		t.Errorf("expected exactly 2 work calls (N=%d debounced via Exclusive.Call), got %d", N, workCalls)
 	}
 
-	if l := len(seenIndexes); l != count {
-		t.Fatal("indexes", l, "!= expected", count, seenIndexes)
-	}
-	for k := 0; k < count; k++ {
-		v := seenIndexes[k]
-		if v != 1 {
-			t.Fatal("wat", k)
-		}
-	}
-
-	if l := len(actualCounts); l != count/group {
-		t.Fatal("counts", l, "!= expected", count/group, actualCounts)
-	}
-	for k := 0; k < count/group; k++ {
-		v := actualCounts[k]
-		if k < count/group/2 {
-			if v <= 2 {
-				t.Error("bad fast count", k, "=", v)
-			}
-		} else if v != 2 {
-			t.Error("bad count", k, "=", v)
-		}
-	}
+	waitForNoWork(t, &e)
 }
 
 func TestExclusive_Call_nilReceiver(t *testing.T) {
@@ -399,7 +465,7 @@ func TestExclusive_Call_nilReceiver(t *testing.T) {
 		}
 	}()
 	var e *Exclusive
-	e.Call(1, func() (interface{}, error) {
+	e.Call(1, func() (any, error) {
 		return nil, nil
 	})
 	t.Error("should not reach")
@@ -418,103 +484,102 @@ func TestExclusive_Call_nilValue(t *testing.T) {
 	t.Error("should not reach")
 }
 
+// TestExclusive_CallAfter verifies that CallAfter's wait window batches
+// concurrent calls into a single work execution.
+//
+// Mechanics with ExclusiveWait=1s:
+//  1. N=100 goroutines are gated, then released simultaneously.
+//  2. All call e.CallAfter(42, work, 1*time.Second).
+//  3. The first call creates the item; its goroutine sets item.running=true,
+//     then sleeps for 1s (exclusive.go:254-260) with item.mutex UNLOCKED.
+//  4. During this sleep, all other calls find the original item in e.work[42]
+//     (nextItem hasn't been created yet), join it, and their goroutines wait
+//     for item.running=false.
+//  5. After 1s, the goroutine creates nextItem, releases mutex, calls work.
+//     The work function blocks on releaseWork and signals "started".
+//  6. The test receives "started" and verifies e.work[42].count == 0 (nextItem
+//     has zero joiners — all calls are on the original item). This is the
+//     deterministic confirmation that no call arrived late.
+//  7. The test closes releaseWork. Work completes; resolve sets
+//     item.complete=true and item.running=false. All N goroutines see
+//     item.complete=true and share the single result.
+//
+// The 1s wait is a generous scheduling assumption: all 100 gated
+// goroutines are released together and arrive in milliseconds, so even
+// with scheduling jitter they join the original item well within the 1s
+// window. The nextItem.count==0 check in step 6 is the verification that
+// no call arrived late (after nextItem was created) and joined nextItem;
+// if that ever happened the count would be > 0 and the test would fail.
+// workCalls==1 is the exact expected count.
 func TestExclusive_CallAfter(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	type Output struct {
-		Key    int
-		Start  int64
-		Finish int64
-		Actual bool
-		Index  int
-	}
-
+	const N = 100
 	var (
-		count     = 10000
-		group     = 100
-		wg        sync.WaitGroup
-		mutex     sync.Mutex
-		outputs   []Output
-		exclusive Exclusive
+		e           Exclusive
+		workCalls   int32
+		releaseWork = make(chan struct{})
+		started     = make(chan struct{}, 1)
+		wg          sync.WaitGroup
 	)
+	wg.Add(N)
 
-	wg.Add(count)
-
-	for i := 0; i < count; i++ {
-		go func(i int) {
+	// Gate all goroutines so they call e.CallAfter simultaneously
+	gate := make(chan struct{})
+	for range N {
+		go func() {
 			defer wg.Done()
-
-			output := Output{
-				Index: i,
-				Start: time.Now().UnixNano(),
-				Key:   i / group,
-			}
-
-			v, err := exclusive.CallAfter(
-				output.Key,
-				func() (interface{}, error) {
-					ts := time.Now()
-					output.Actual = true
-					return ts.UnixNano(), nil
-				},
-				time.Millisecond*500,
-			)
+			<-gate
+			v, err := e.CallAfter(42, func() (any, error) {
+				atomic.AddInt32(&workCalls, 1)
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-releaseWork
+				return "shared", nil
+			}, time.Second)
 			if err != nil {
 				t.Error(err)
 			}
-
-			output.Finish = v.(int64)
-
-			mutex.Lock()
-			defer mutex.Unlock()
-			outputs = append(outputs, output)
-		}(i)
+			if v != "shared" {
+				t.Errorf("expected 'shared', got %v", v)
+			}
+		}()
 	}
 
+	// Release all goroutines simultaneously
+	close(gate)
+
+	// Wait for the 1s wait to expire and the work to start (the work
+	// function blocks on releaseWork and signals "started").
+	<-started
+
+	// Deterministic verification: nextItem should have ZERO joiners, proving
+	// all calls joined the original item during the wait window. If any call
+	// arrived late (after nextItem was created), it would join nextItem and
+	// this count would be > 0, failing the test.
+	e.mutex.Lock()
+	nextItem := e.work[42]
+	e.mutex.Unlock()
+	if nextItem != nil {
+		nextItem.mutex.Lock()
+		nextCount := nextItem.count
+		nextItem.mutex.Unlock()
+		if nextCount != 0 {
+			t.Errorf("expected 0 calls on nextItem (all should be on original item), got %d", nextCount)
+		}
+	}
+
+	// Release the work — all N calls share this single execution.
+	close(releaseWork)
 	wg.Wait()
 
-	if len(outputs) != count {
-		t.Fatal(len(outputs), outputs)
-	}
-	exclusive.mutex.Lock()
-	if len(exclusive.work) != 0 {
-		t.Fatal(exclusive.work)
-	}
-	exclusive.mutex.Unlock()
-
-	actualCounts := make(map[int]int)
-	seenIndexes := make(map[int]int)
-
-	for _, output := range outputs {
-		key := output.Index / group
-		if output.Actual {
-			actualCounts[key]++
-		}
-		seenIndexes[output.Index]++
-		if output.Start > output.Finish {
-			t.Error(output)
-		}
+	if workCalls := atomic.LoadInt32(&workCalls); workCalls != 1 {
+		t.Errorf("expected exactly 1 work call (N=%d calls batched via 1s wait), got %d", N, workCalls)
 	}
 
-	if l := len(seenIndexes); l != count {
-		t.Fatal("indexes", l, "!= expected", count, seenIndexes)
-	}
-	for k := 0; k < count; k++ {
-		v := seenIndexes[k]
-		if v != 1 {
-			t.Fatal("wat", k)
-		}
-	}
-
-	if l := len(actualCounts); l != count/group {
-		t.Fatal("counts", l, "!= expected", count/group, actualCounts)
-	}
-	for k := 0; k < count/group; k++ {
-		v := actualCounts[k]
-		if v != 1 {
-			t.Error("bad count", k, "=", v)
-		}
-	}
+	waitForNoWork(t, &e)
 }
 
 func TestExclusive_CallAfter_adjustedWait(t *testing.T) {
@@ -529,7 +594,7 @@ func TestExclusive_CallAfter_adjustedWait(t *testing.T) {
 	ts := time.Now()
 
 	go func() {
-		e.Call(1, func() (interface{}, error) {
+		e.Call(1, func() (any, error) {
 			c++
 			close(d)
 			time.Sleep(time.Millisecond * 500)
@@ -539,7 +604,7 @@ func TestExclusive_CallAfter_adjustedWait(t *testing.T) {
 
 	<-d
 
-	e.CallAfter(1, func() (interface{}, error) {
+	e.CallAfter(1, func() (any, error) {
 		c++
 		return nil, nil
 	}, time.Millisecond*800)
@@ -567,7 +632,7 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 	ts := time.Now()
 
 	go func() {
-		e.Call(1, func() (interface{}, error) {
+		e.Call(1, func() (any, error) {
 			c++
 			close(d)
 			time.Sleep(time.Millisecond * 500)
@@ -577,7 +642,7 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 
 	<-d
 
-	e.CallAfter(1, func() (interface{}, error) {
+	e.CallAfter(1, func() (any, error) {
 		c++
 		return nil, nil
 	}, time.Millisecond*100)
@@ -596,7 +661,7 @@ func TestExclusive_CallAfter_adjustedWaitSmaller(t *testing.T) {
 func TestCallAsync(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	for x := 0; x < 10; x++ {
+	for range 10 {
 		var (
 			exclusive   Exclusive
 			outcomeChan <-chan *ExclusiveOutcome
@@ -604,16 +669,16 @@ func TestCallAsync(t *testing.T) {
 			locked      = true
 			calls       int
 		)
-		exclusive.CallAsync(1, func() (interface{}, error) {
+		exclusive.CallAsync(1, func() (any, error) {
 			time.Sleep(time.Millisecond * 200)
 			mutex.Lock()
 			locked = false
 			mutex.Unlock()
 			return nil, nil
 		})
-		for y := 0; y < 1000; y++ {
+		for y := range 1000 {
 			func(y int) {
-				outcomeChan = exclusive.CallAsync(1, func() (interface{}, error) {
+				outcomeChan = exclusive.CallAsync(1, func() (any, error) {
 					mutex.Lock()
 					if locked {
 						t.Error(locked)
@@ -651,12 +716,12 @@ func TestExclusive_Start(t *testing.T) {
 		wg      sync.WaitGroup
 	)
 	wg.Add(10)
-	for x := 0; x < 10; x++ {
+	for range 10 {
 		go func() {
 			defer wg.Done()
 			time.Sleep(time.Millisecond * 5)
-			for x := 0; x < 10; x++ {
-				e.Start(nil, func() (i interface{}, e error) {
+			for range 10 {
+				e.Start(nil, func() (i any, e error) {
 					time.Sleep(time.Millisecond * 200)
 					mutex.Lock()
 					counter++
@@ -692,7 +757,7 @@ func TestExclusive_StartAfter(t *testing.T) {
 	)
 	e.StartAfter(
 		nil,
-		func() (interface{}, error) {
+		func() (any, error) {
 			t.Error(`bad`)
 			panic(`bad`)
 		},
@@ -700,14 +765,14 @@ func TestExclusive_StartAfter(t *testing.T) {
 	)
 	outcome := e.CallAsync(
 		nil,
-		func() (i interface{}, e error) {
+		func() (i any, e error) {
 			t.Error(`bad`)
 			panic(`bad`)
 		},
 	)
 	e.Start(
 		nil,
-		func() (interface{}, error) {
+		func() (any, error) {
 			mutex.Lock()
 			counter++
 			final = counter
@@ -731,7 +796,7 @@ func TestExclusive_StartAfter(t *testing.T) {
 	mutex.Unlock()
 }
 
-var benchmarkOutput interface{}
+var benchmarkOutput any
 
 func BenchmarkExclusive_outcomeContention(b *testing.B) {
 	for _, tc := range [...]struct {
@@ -783,7 +848,7 @@ func BenchmarkExclusive_outcomeContention(b *testing.B) {
 					defer close(initialIn)
 					initialOut := make(chan struct{})
 					defer close(initialOut)
-					initialOutcome := exclusive.CallWithOptions(ExclusiveValue(func() (interface{}, error) {
+					initialOutcome := exclusive.CallWithOptions(ExclusiveValue(func() (any, error) {
 						initialIn <- struct{}{}
 						<-initialOut
 						return 123, nil
@@ -804,7 +869,7 @@ func BenchmarkExclusive_outcomeContention(b *testing.B) {
 
 					for i := 0; i < tc.Count; i++ {
 						go func() {
-							v := <-exclusive.CallWithOptions(ExclusiveValue(func() (interface{}, error) {
+							v := <-exclusive.CallWithOptions(ExclusiveValue(func() (any, error) {
 								in <- struct{}{}
 								return 456, nil
 							}))
@@ -842,7 +907,7 @@ func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
 		x     Exclusive
 		calls int32
 	)
-	if v := x.CallWithOptions(ExclusiveStart(true), ExclusiveWork(func(resolve func(result interface{}, err error)) { atomic.AddInt32(&calls, 1) })); v != nil {
+	if v := x.CallWithOptions(ExclusiveStart(true), ExclusiveWork(func(resolve func(result any, err error)) { atomic.AddInt32(&calls, 1) })); v != nil {
 		t.Error()
 	}
 	for i := time.Duration(0); i < 1000 && atomic.LoadInt32(&calls) == 0; i++ {
@@ -856,7 +921,7 @@ func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
 func TestExclusive_CallWithOptions_resolveNotCalled(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	v := <-new(Exclusive).CallWithOptions(ExclusiveWork(func(resolve func(result interface{}, err error)) {}))
+	v := <-new(Exclusive).CallWithOptions(ExclusiveWork(func(resolve func(result any, err error)) {}))
 	if v.Error != errResolveNotCalled || v.Result != nil {
 		t.Error(v)
 	}
@@ -879,14 +944,14 @@ func TestExclusiveRateLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	wg.Add(num)
-	for i := 0; i < num; i++ {
+	for range num {
 		go func() {
 			var last int64
 			for {
 				ts := time.Now()
 				v := <-x.CallWithOptions(
 					ExclusiveRateLimit(ctx, min),
-					ExclusiveWork(func(resolve func(result interface{}, err error)) { resolve(atomic.AddInt64(&called, 1), nil) }),
+					ExclusiveWork(func(resolve func(result any, err error)) { resolve(atomic.AddInt64(&called, 1), nil) }),
 				)
 				if d := time.Since(ts); d <= min/2 {
 					atomic.AddInt64(&shorter, 1)

@@ -47,7 +47,7 @@ const (
 //
 // [Retry]: https://pkg.go.dev/github.com/joeycumines/go-expbkoff#Retry
 // [github.com/joeycumines/go-expbkoff]: https://github.com/joeycumines/go-expbkoff
-func ExponentialRetry(ctx context.Context, rate time.Duration, value func() (interface{}, error)) func() (interface{}, error) {
+func ExponentialRetry(ctx context.Context, rate time.Duration, value func() (any, error)) func() (any, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -57,7 +57,7 @@ func ExponentialRetry(ctx context.Context, rate time.Duration, value func() (int
 	if value == nil {
 		panic(errors.New("bigbuff.ExponentialRetry nil value"))
 	}
-	return func() (interface{}, error) {
+	return func() (any, error) {
 		var c uint32
 		for {
 			if err := ctx.Err(); err != nil {

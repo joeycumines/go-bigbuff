@@ -31,7 +31,7 @@ type (
 		// generally equivalent to `results(callable(args()))`, treating nil (interface values) as omitting any
 		// args, or not handling any return value. Note that Call will return an error if args or results are not
 		// compatible with the underlying types, indicated by Callable.Type. See also bigbuff.Call and CallOption.
-		Call(args, results interface{}) error
+		Call(args, results any) error
 	}
 
 	// CallOption models a configuration option for the Call function provided by this package, see also the
@@ -41,8 +41,8 @@ type (
 	// callConfig models configuration for the Call function
 	callConfig struct {
 		this    reflect.Type
-		args    interface{}
-		results interface{}
+		args    any
+		results any
 	}
 
 	callable struct {
@@ -56,7 +56,7 @@ type (
 
 // NewCallable initialises a new Callable from fn, which must be a non-nil function, but is otherwise unconstrained,
 // note a panic will occur if fn is not a function, or is a function but isn't non-nil
-func NewCallable(fn interface{}) Callable {
+func NewCallable(fn any) Callable {
 	v := reflect.ValueOf(fn)
 	if kind := v.Kind(); kind != reflect.Func {
 		panic(fmt.Errorf(`bigbuff.NewCallable not func: %v`, kind))
@@ -90,7 +90,7 @@ func MustCall(caller Callable, options ...CallOption) {
 }
 
 // CallArgs returns a CallOption that will pass the provided args to a Callable that is called via the Call function
-func CallArgs(args ...interface{}) CallOption {
+func CallArgs(args ...any) CallOption {
 	return func(config *callConfig) error {
 		in, err := resolveArgs(config.this, typesArgs(args))
 		if err != nil {
@@ -112,7 +112,7 @@ func CallArgs(args ...interface{}) CallOption {
 }
 
 // CallResults returns a CallOption that will assign the call's results to the values pointed at by results
-func CallResults(results ...interface{}) CallOption {
+func CallResults(results ...any) CallOption {
 	return func(config *callConfig) error {
 		out := typesInOut(config.this.NumOut(), config.this.Out)
 		if len(results) != len(out) {
@@ -121,7 +121,7 @@ func CallResults(results ...interface{}) CallOption {
 		for i, out := range out {
 			v := reflect.ValueOf(results[i])
 			t := v.Type()
-			if kind := t.Kind(); kind != reflect.Ptr {
+			if kind := t.Kind(); kind != reflect.Pointer {
 				return fmt.Errorf(`bigbuff.CallResults results[%d] error: %v kind %v not ptr`, i, t, kind)
 			}
 			if v.IsNil() {
@@ -146,10 +146,10 @@ func CallResults(results ...interface{}) CallOption {
 }
 
 // CallResultsSlice returns a CallOption that will append the call's results to a slice pointed at by target
-func CallResultsSlice(target interface{}) CallOption {
+func CallResultsSlice(target any) CallOption {
 	return func(config *callConfig) error {
 		value := reflect.ValueOf(target)
-		if value.Kind() != reflect.Ptr {
+		if value.Kind() != reflect.Pointer {
 			return fmt.Errorf(`bigbuff.CallResultsSlice target error: not ptr: %T`, target)
 		}
 		if value.IsNil() {
@@ -182,7 +182,7 @@ func CallResultsSlice(target interface{}) CallOption {
 }
 
 // CallArgsRaw returns a CallOption that will pass args to Callable.Call without modification or validation
-func CallArgsRaw(args interface{}) CallOption {
+func CallArgsRaw(args any) CallOption {
 	return func(config *callConfig) error {
 		config.args = args
 		return nil
@@ -190,7 +190,7 @@ func CallArgsRaw(args interface{}) CallOption {
 }
 
 // CallResultsRaw returns a CallOption that will pass results to Callable.Call without modification or validation
-func CallResultsRaw(results interface{}) CallOption {
+func CallResultsRaw(results any) CallOption {
 	return func(config *callConfig) error {
 		config.results = results
 		return nil
@@ -198,7 +198,7 @@ func CallResultsRaw(results interface{}) CallOption {
 }
 
 // Call implements Callable.Call using the reflect package
-func (x *callable) Call(args, results interface{}) error {
+func (x *callable) Call(args, results any) error {
 	var argsV reflect.Value
 	if args != nil {
 		argsV = reflect.ValueOf(args)
@@ -246,7 +246,7 @@ func typesInOut(n int, fn func(i int) reflect.Type) []reflect.Type {
 	return r
 }
 
-func typesArgs(args []interface{}) []reflect.Type {
+func typesArgs(args []any) []reflect.Type {
 	r := make([]reflect.Type, len(args))
 	for i, arg := range args {
 		r[i] = reflect.TypeOf(arg)

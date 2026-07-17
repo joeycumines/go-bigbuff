@@ -83,8 +83,8 @@ func TestWorker_Do(t *testing.T) {
 		}
 	)
 
-	for x := 0; x < 3; x++ {
-		for x := 0; x < 5; x++ {
+	for range 3 {
+		for range 5 {
 			var wg sync.WaitGroup
 			for i, tc := range []struct {
 				In  []int
@@ -115,7 +115,6 @@ func TestWorker_Do(t *testing.T) {
 				{[]int{0, 0, 4, 1}, 5},
 				{[]int{}, 0},
 			} {
-				i, tc := i, tc
 				wg.Add(1)
 				go func() {
 					defer wg.Done()

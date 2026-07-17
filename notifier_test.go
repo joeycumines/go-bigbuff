@@ -130,7 +130,7 @@ func TestNotifier_PublishContext_cancel(t *testing.T) {
 		nf          = new(Notifier)
 		out         = make(chan int, 10)
 		key         = 1
-		target      = make(chan interface{})
+		target      = make(chan any)
 		ctx, cancel = context.WithCancel(context.Background())
 	)
 	defer cancel()
@@ -177,7 +177,7 @@ func TestNotifier_PublishContext_cancelGuarded(t *testing.T) {
 	var (
 		nf          = new(Notifier)
 		key         = 1
-		target      = make(chan interface{})
+		target      = make(chan any)
 		ctx, cancel = context.WithCancel(context.Background())
 	)
 	cancel()
@@ -196,7 +196,7 @@ func TestNotifier_SubscribeContext_premptivelyCanceled(t *testing.T) {
 	var (
 		nf          = new(Notifier)
 		key         = 1
-		target      = make(chan interface{})
+		target      = make(chan any)
 		ctx, cancel = context.WithCancel(context.Background())
 	)
 	cancel()
@@ -221,9 +221,9 @@ func TestNotifier_SubscribeContext_premptivelyCanceled(t *testing.T) {
 func TestNotifier_SubscribeContext_exists(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	target := make(chan interface{})
+	target := make(chan any)
 	nf := Notifier{
-		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
+		subscribers: map[any]map[uintptr]notifierSubscriber{
 			123: {
 				reflect.ValueOf(target).Pointer(): {},
 			},
@@ -243,9 +243,9 @@ func TestNotifier_SubscribeContext_exists(t *testing.T) {
 func TestNotifier_Unsubscribe_onceOnly(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	target := make(chan interface{})
+	target := make(chan any)
 	nf := Notifier{
-		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
+		subscribers: map[any]map[uintptr]notifierSubscriber{
 			123: {
 				reflect.ValueOf(target).Pointer(): {},
 			},
@@ -299,7 +299,7 @@ func TestNotifier_Publish_none(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	nf := &Notifier{
-		subscribers: map[interface{}]map[uintptr]notifierSubscriber{},
+		subscribers: map[any]map[uintptr]notifierSubscriber{},
 	}
 	nf.Publish(nil, nil)
 }
@@ -324,7 +324,7 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 
 	// process 0 to increments1 for count1 subscribers
 	wg1.Add(count1)
-	for x := 0; x < count1; x++ {
+	for range count1 {
 		func() {
 			c := make(chan int)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -333,7 +333,7 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 				defer wg1.Done()
 				defer nf.Unsubscribe(key1, c)
 				defer cancel()
-				for x := 0; x < increments1; x++ {
+				for x := range increments1 {
 					v := <-c
 					if v != x {
 						t.Error(v, x)
@@ -345,7 +345,7 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 	}
 
 	// subscribe extra
-	for _, c := range []interface{}{c1, c2, c3, c4, c5} {
+	for _, c := range []any{c1, c2, c3, c4, c5} {
 		nf.Subscribe(key1, c)
 	}
 	nf.Subscribe(key2, c6)
@@ -358,7 +358,7 @@ func TestNotifier_highVolumeIntegrityCheck(t *testing.T) {
 	wg1.Wait()
 
 	// unsubscribe extra
-	for _, c := range []interface{}{c1, c2, c3, c4, c5} {
+	for _, c := range []any{c1, c2, c3, c4, c5} {
 		nf.Unsubscribe(key1, c)
 	}
 	nf.Unsubscribe(key2, c6)
@@ -446,9 +446,9 @@ func TestNotifier_SubscribeCancel_panic(t *testing.T) {
 			}
 		}
 	}()()
-	target := make(chan interface{})
+	target := make(chan any)
 	nf := Notifier{
-		subscribers: map[interface{}]map[uintptr]notifierSubscriber{
+		subscribers: map[any]map[uintptr]notifierSubscriber{
 			123: {
 				reflect.ValueOf(target).Pointer(): {},
 			},
@@ -478,7 +478,7 @@ func TestNotifier_SubscribeCancel_parentCancel(t *testing.T) {
 	}()()
 	var (
 		nf          Notifier
-		target      = make(chan interface{})
+		target      = make(chan any)
 		ctx, cancel = context.WithCancel(context.Background())
 	)
 	nf.SubscribeContext(ctx, nil, target)

@@ -229,7 +229,7 @@ func TestBuffer_Slice_copy(t *testing.T) {
 	t.Cleanup(func() {
 		_ = b.Close()
 	})
-	c := []interface{}{
+	c := []any{
 		1,
 		2,
 		new(struct{}),
@@ -330,7 +330,7 @@ func TestBuffer_Put_success(t *testing.T) {
 		_ = b.Close()
 	})
 	b.ctx = context.Background()
-	z := []interface{}{1, 2, 3}
+	z := []any{1, 2, 3}
 	b.buffer = z
 	b.ensure()
 
@@ -366,7 +366,7 @@ func TestBuffer_Put_success(t *testing.T) {
 
 	<-out
 
-	if diff := deep.Equal([]interface{}{1, 2, 3, 4, 5}, b.buffer); diff != nil {
+	if diff := deep.Equal([]any{1, 2, 3, 4, 5}, b.buffer); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 
@@ -410,7 +410,7 @@ func TestBuffer_Put_successNil(t *testing.T) {
 
 	<-out
 
-	if diff := deep.Equal([]interface{}{4, 5}, b.buffer); diff != nil {
+	if diff := deep.Equal([]any{4, 5}, b.buffer); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 
@@ -611,12 +611,12 @@ func TestBuffer_Diff_range(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var values []interface{}
+	var values []any
 
 	err = Range(
 		nil,
 		c,
-		func(index int, value interface{}) bool {
+		func(index int, value any) bool {
 			values = append(values, value)
 
 			diff, ok := buffer.Diff(c)
@@ -633,7 +633,7 @@ func TestBuffer_Diff_range(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if diff := deep.Equal(values, []interface{}{1, 2, 3, 4}); diff != nil {
+	if diff := deep.Equal(values, []any{1, 2, 3, 4}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 }
@@ -655,12 +655,12 @@ func TestBuffer_Range_simple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var values []interface{}
+	var values []any
 
 	err = buffer.Range(
 		nil,
 		c,
-		func(index int, value interface{}) bool {
+		func(index int, value any) bool {
 			values = append(values, value)
 			return true
 		},
@@ -688,7 +688,7 @@ func TestBuffer_Range_added(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var values []interface{}
+	var values []any
 
 	go func() {
 		time.Sleep(time.Millisecond * 50)
@@ -698,7 +698,7 @@ func TestBuffer_Range_added(t *testing.T) {
 	err = buffer.Range(
 		nil,
 		c,
-		func(index int, value interface{}) bool {
+		func(index int, value any) bool {
 			values = append(values, value)
 			time.Sleep(time.Millisecond * 30)
 			return true
@@ -709,7 +709,7 @@ func TestBuffer_Range_added(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if diff := deep.Equal(values, []interface{}{1, 2, 3, 4, 5, 6}); diff != nil {
+	if diff := deep.Equal(values, []any{1, 2, 3, 4, 5, 6}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 }
@@ -731,12 +731,12 @@ func TestBuffer_Range_bailOut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var values []interface{}
+	var values []any
 
 	err = buffer.Range(
 		nil,
 		c,
-		func(index int, value interface{}) bool {
+		func(index int, value any) bool {
 			values = append(values, value)
 			return value != 2
 		},
@@ -746,7 +746,7 @@ func TestBuffer_Range_bailOut(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if diff := deep.Equal(values, []interface{}{1, 2}); diff != nil {
+	if diff := deep.Equal(values, []any{1, 2}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 }
@@ -768,7 +768,7 @@ func TestBuffer_Range_in(t *testing.T) {
 	}
 
 	for _, c := range consumers {
-		err := buffer.Range(context.Background(), c, func(index int, value interface{}) bool {
+		err := buffer.Range(context.Background(), c, func(index int, value any) bool {
 			return false
 		})
 

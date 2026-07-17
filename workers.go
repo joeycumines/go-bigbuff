@@ -23,11 +23,11 @@ import (
 
 // Call will call value synchronously, with up to count concurrency (with other concurrent calls), note that it will
 // panic if the receiver is nil, the count is <= 0, or the value is nil.
-func (w *Workers) Call(count int, value func() (interface{}, error)) (interface{}, error) {
+func (w *Workers) Call(count int, value func() (any, error)) (any, error) {
 	w.ensure()
 	w.check(count, value)
 	output := make(chan struct {
-		result interface{}
+		result any
 		error  error
 	}, 1)
 	w.mutex.Lock()
@@ -37,9 +37,9 @@ func (w *Workers) Call(count int, value func() (interface{}, error)) (interface{
 	w.queue = append(
 		w.queue,
 		&struct {
-			value  func() (interface{}, error)
+			value  func() (any, error)
 			output chan<- struct {
-				result interface{}
+				result any
 				error  error
 			}
 		}{
@@ -59,10 +59,10 @@ func (w *Workers) Call(count int, value func() (interface{}, error)) (interface{
 
 // Wrap encapsulates the provided value as a worker call, note that it will panic if the receiver is nil, the count
 // is <= 0, or the value is nil.
-func (w *Workers) Wrap(count int, value func() (interface{}, error)) func() (interface{}, error) {
+func (w *Workers) Wrap(count int, value func() (any, error)) func() (any, error) {
 	w.ensure()
 	w.check(count, value)
-	return func() (interface{}, error) {
+	return func() (any, error) {
 		return w.Call(count, value)
 	}
 }
@@ -91,7 +91,7 @@ func (w *Workers) ensure() {
 	}
 }
 
-func (w *Workers) check(count int, value func() (interface{}, error)) {
+func (w *Workers) check(count int, value func() (any, error)) {
 	if count <= 0 {
 		panic(errors.New("bigbuff.Workers count <= 0"))
 	}
@@ -118,7 +118,7 @@ func (w *Workers) worker() {
 		func() {
 			defer close(item.output)
 			var result struct {
-				result interface{}
+				result any
 				error  error
 			}
 			result.result, result.error = item.value()

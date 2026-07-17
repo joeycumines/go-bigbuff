@@ -69,11 +69,46 @@ func checkNumGoroutines(t interface {
 		if t != nil {
 			t.Helper()
 		}
-		after := waitNumGoroutines(time.Second, func(n int) bool { return n <= before })
-		if after > before {
-			var b bytes.Buffer
-			_ = pprof.Lookup("goroutine").WriteTo(&b, 1)
-			testingErrorfOrPanic(t, "%s\n\nstarted with %d goroutines finished with %d", b.Bytes(), before, after)
+		// Wait for the goroutine count to settle at or below the baseline.
+		//
+		// A single instantaneous reading (or a fixed 1s wait) is racy under
+		// -race: the race detector, background goroutines, and in-flight worker
+		// goroutines (whose cleanup happens only after an outcome is delivered)
+		// may take longer than 1s to drain, producing a transient spike that
+		// looks like a leak. Requiring the count to remain <= before for a short
+		// stable window reduces transient false positives, while a genuine leak
+		// (count never returning to baseline) will typically still fail once the
+		// budget is exhausted.
+		//
+		// CAVEAT: runtime.NumGoroutine is process-global. This check cannot
+		// eliminate all false positives (an unrelated goroutine may keep the
+		// count above baseline) or all false negatives (an unrelated goroutine
+		// may exit and mask a real leak). It is a pragmatic heuristic, not a
+		// sound leak detector. For precise leak detection, use explicit
+		// WaitGroup/completion-channel joins for goroutines owned by each test.
+		const settleBudget = 5 * time.Second
+		const stableWindow = 50 * time.Millisecond
+		deadline := time.Now().Add(settleBudget)
+		var stableSince time.Time
+		for {
+			runtime.GC() // help finalizer-based goroutine cleanup
+			n := runtime.NumGoroutine()
+			if n <= before {
+				if stableSince.IsZero() {
+					stableSince = time.Now()
+				} else if time.Since(stableSince) >= stableWindow {
+					return
+				}
+			} else {
+				stableSince = time.Time{}
+			}
+			if time.Now().After(deadline) {
+				var b bytes.Buffer
+				_ = pprof.Lookup("goroutine").WriteTo(&b, 1)
+				testingErrorfOrPanic(t, "%s\n\nstarted with %d goroutines finished with %d", b.Bytes(), before, n)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 }
@@ -81,7 +116,7 @@ func checkNumGoroutines(t interface {
 func testingErrorfOrPanic(t interface {
 	Helper()
 	Errorf(format string, values ...any)
-}, format string, values ...interface{}) {
+}, format string, values ...any) {
 	if t == nil {
 		panic(fmt.Errorf(format, values...))
 	}

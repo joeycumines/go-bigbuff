@@ -60,7 +60,7 @@ func (c *consumer) Done() <-chan struct{} {
 	return c.done
 }
 
-func (c *consumer) Get(ctx context.Context) (interface{}, error) {
+func (c *consumer) Get(ctx context.Context) (any, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

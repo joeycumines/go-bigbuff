@@ -27,7 +27,7 @@ import (
 // NewChannel constructs a new consumer that implements Consumer, but receives it's data from a channel, which
 // uses reflection to support any readable channel, note that a poll date of zero will use the default, and < 0 is
 // an error.
-func NewChannel(ctx context.Context, pollRate time.Duration, source interface{}) (*Channel, error) {
+func NewChannel(ctx context.Context, pollRate time.Duration, source any) (*Channel, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -72,7 +72,7 @@ func NewChannel(ctx context.Context, pollRate time.Duration, source interface{})
 // Buffer returns any values that were drained from the source but not committed yet, in a new copy of the internal
 // buffer, note that if you are trying to ensure no messages get lost in the void, block until Channel.Done before
 // calling this.
-func (c *Channel) Buffer() []interface{} {
+func (c *Channel) Buffer() []any {
 	c.ensure()
 
 	c.mutex.Lock()
@@ -82,7 +82,7 @@ func (c *Channel) Buffer() []interface{} {
 		return nil
 	}
 
-	result := make([]interface{}, len(c.buffer))
+	result := make([]any, len(c.buffer))
 	copy(result, c.buffer)
 
 	return result
@@ -121,7 +121,7 @@ func (c *Channel) Done() <-chan struct{} {
 	return c.done
 }
 
-func (c *Channel) Get(ctx context.Context) (value interface{}, err error) {
+func (c *Channel) Get(ctx context.Context) (value any, err error) {
 	c.ensure()
 
 	// init on first failure, and re-used from then
@@ -211,7 +211,7 @@ func (c *Channel) Commit() error {
 	}
 
 	// clear refs to ensure no memory leaks via the buffer slice
-	for i := 0; i < pending; i++ {
+	for i := range pending {
 		c.buffer[i] = nil
 	}
 

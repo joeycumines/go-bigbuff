@@ -29,7 +29,7 @@ var (
 )
 
 // ExclusiveKey configures a comparable value for grouping calls, for debouncing, limiting, etc.
-func ExclusiveKey(value interface{}) ExclusiveOption {
+func ExclusiveKey(value any) ExclusiveOption {
 	return func(c *exclusiveConfig) { c.key = value }
 }
 
@@ -39,10 +39,10 @@ func ExclusiveWork(value WorkFunc) ExclusiveOption {
 }
 
 // ExclusiveValue implements a simpler style of ExclusiveWork (that was originally the only supported behavior).
-func ExclusiveValue(value func() (interface{}, error)) ExclusiveOption {
+func ExclusiveValue(value func() (any, error)) ExclusiveOption {
 	var work WorkFunc
 	if value != nil {
-		work = func(resolve func(result interface{}, err error)) { resolve(value()) }
+		work = func(resolve func(result any, err error)) { resolve(value()) }
 	}
 	return ExclusiveWork(work)
 }
@@ -80,7 +80,7 @@ func ExclusiveRateLimit(ctx context.Context, minDuration time.Duration) Exclusiv
 		if value == nil {
 			panic(fmt.Errorf("bigbuff.ExclusiveRateLimit nil work func"))
 		}
-		return func(resolve func(result interface{}, err error)) {
+		return func(resolve func(result any, err error)) {
 			if err := ctx.Err(); err != nil {
 				resolve(nil, err)
 				return
@@ -118,13 +118,13 @@ func (e *Exclusive) CallWithOptions(options ...ExclusiveOption) <-chan *Exclusiv
 // performed, these operations will be grouped such that they are debounced to a single call, sharing the output.
 //
 // Note that this method will panic if the receiver is nil, or the value is nil, but a nil key is allowed.
-func (e *Exclusive) Call(key interface{}, value func() (interface{}, error)) (interface{}, error) {
+func (e *Exclusive) Call(key any, value func() (any, error)) (any, error) {
 	return e.CallAfter(key, value, 0)
 }
 
 // CallAfter performs exactly the same operation as the Exclusive.Call method, but with an added wait to allow
 // operations sent through in close succession to be grouped together, note that if wait is <= 0 it will be ignored.
-func (e *Exclusive) CallAfter(key interface{}, value func() (interface{}, error), wait time.Duration) (interface{}, error) {
+func (e *Exclusive) CallAfter(key any, value func() (any, error), wait time.Duration) (any, error) {
 	v := <-e.CallAfterAsync(key, value, wait)
 	return v.Result, v.Error
 }
@@ -133,7 +133,7 @@ func (e *Exclusive) CallAfter(key interface{}, value func() (interface{}, error)
 //
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
-func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)) <-chan *ExclusiveOutcome {
+func (e *Exclusive) CallAsync(key any, value func() (any, error)) <-chan *ExclusiveOutcome {
 	return e.CallAfterAsync(key, value, 0)
 }
 
@@ -141,17 +141,17 @@ func (e *Exclusive) CallAsync(key interface{}, value func() (interface{}, error)
 //
 // Note that the return value will always be closed after being sent the result, and will therefore any additional
 // reads will always receive nil.
-func (e *Exclusive) CallAfterAsync(key interface{}, value func() (interface{}, error), wait time.Duration) <-chan *ExclusiveOutcome {
+func (e *Exclusive) CallAfterAsync(key any, value func() (any, error), wait time.Duration) <-chan *ExclusiveOutcome {
 	return e.CallWithOptions(ExclusiveKey(key), ExclusiveValue(value), ExclusiveWait(wait))
 }
 
 // Start is synonymous with a CallAsync that avoids spawning a unnecessary goroutines to wait for results
-func (e *Exclusive) Start(key interface{}, value func() (interface{}, error)) {
+func (e *Exclusive) Start(key any, value func() (any, error)) {
 	e.StartAfter(key, value, 0)
 }
 
 // StartAfter is synonymous with a CallAfterAsync that avoids spawning a unnecessary goroutines to wait for results
-func (e *Exclusive) StartAfter(key interface{}, value func() (interface{}, error), wait time.Duration) {
+func (e *Exclusive) StartAfter(key any, value func() (any, error), wait time.Duration) {
 	e.CallWithOptions(ExclusiveKey(key), ExclusiveValue(value), ExclusiveWait(wait), ExclusiveStart(true))
 }
 
@@ -166,7 +166,7 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 		// init map and obtain item
 		e.mutex.Lock()
 		if e.work == nil {
-			e.work = make(map[interface{}]*exclusiveItem)
+			e.work = make(map[any]*exclusiveItem)
 		}
 		if _, ok := e.work[c.key]; !ok {
 			var mu sync.Mutex
@@ -278,7 +278,7 @@ func (e *Exclusive) call(c exclusiveConfig) <-chan *ExclusiveOutcome {
 		{
 			var (
 				once    sync.Once
-				resolve = func(result interface{}, err error) {
+				resolve = func(result any, err error) {
 					once.Do(func() {
 						if outcome != nil {
 							outcome <- &ExclusiveOutcome{

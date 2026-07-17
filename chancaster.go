@@ -25,8 +25,30 @@ import (
 // ChanCaster supports broadcasting messages to multiple receivers, via a
 // single channel, without callbacks.
 //
+// The underlying channel C MUST be unbuffered (cap == 0). This is a hard
+// precondition of the implementation: [ChanCaster.Send] performs exactly one
+// synchronous send per registered receiver, relying on the one-to-one
+// send/receive semantics of an unbuffered channel to guarantee delivery. A
+// buffered channel would violate these invariants and can cause deadlocks or
+// undetected missed receives.
+//
+// A nil channel is permitted. It satisfies the cap == 0 requirement and
+// behaves according to standard Go semantics: sends and receives block
+// forever, and select cases on a nil channel never fire. This allows a
+// ChanCaster to be used in a "disabled" state — [ChanCaster.Send] returns 0
+// when there are no receivers, and the channel can be included in a select
+// statement without ever being selected.
+//
+// Construction is "softly" enforced: [NewChanCaster] validates the
+// precondition and panics on a buffered channel, but a value may also be
+// built directly via a struct literal, which bypasses that check. Callers
+// that construct a [ChanCaster] directly are responsible for honouring the
+// unbuffered requirement themselves. The channel requirement matches
+// ChanPubSub; unlike ChanPubSub, direct ChanCaster construction remains
+// supported and relies on the caller to preserve the invariant.
+//
 // See also [NewChanCaster] (optional).
-type ChanCaster[C chan V, V any] struct {
+type ChanCaster[C ~chan V, V any] struct {
 	// C is the channel that will be used to broadcast messages.
 	//
 	// See [ChanCaster.Add] and [ChanCaster.Send] for usage details.
@@ -50,9 +72,14 @@ type ChanCaster[C chan V, V any] struct {
 	state atomic.Uint64
 }
 
-// NewChanCaster is a factory for [ChanCaster] that exists solely for the
-// convenience of type inference.
-func NewChanCaster[C chan V, V any](channel C) *ChanCaster[C, V] {
+// NewChanCaster constructs a [ChanCaster] for the provided channel. It exists
+// primarily for type inference convenience, but also enforces the
+// [ChanCaster] precondition: the channel must be unbuffered (cap == 0). A nil
+// channel is permitted. It panics if the channel is buffered.
+func NewChanCaster[C ~chan V, V any](channel C) *ChanCaster[C, V] {
+	if cap(channel) != 0 {
+		panic("bigbuff: chancaster: must use an unbuffered channel")
+	}
 	return &ChanCaster[C, V]{C: channel}
 }
 

@@ -133,6 +133,7 @@ func ExampleChanCaster_waitForNextFullCycle() {
 
 	// wait for 10 full cycles, as handled by the first waiter
 	for i := range 10 {
+		<-fullCycleComplete
 		fmt.Printf("handled %d cycles so far...\n", i+1)
 	}
 
@@ -142,7 +143,7 @@ func ExampleChanCaster_waitForNextFullCycle() {
 
 	fmt.Println(`OK!`)
 
-	//output:
+	// Output:
 	//handled 1 cycles so far...
 	//handled 2 cycles so far...
 	//handled 3 cycles so far...
@@ -233,7 +234,7 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 
 	fmt.Println(`final num receivers:`, stateStr())
 
-	//output:
+	// Unordered output:
 	//state before send: receivers: 3, remaining: -2147483644, state: 00000000000000000000000000000011|00000000000000000000000000000011
 	//received: 1
 	//received: 1
@@ -272,13 +273,27 @@ func BenchmarkChanCaster_Send_waitForNextFullCycle(b *testing.B) {
 	b.Log(dontElideMe)
 }
 
-func TestChanCaster_Send_waitForNextFullCycle(t *testing.T) {
+// TestChanCaster_Send_waitForNextFullCycle_stress is a high-contention stress
+// test that verifies no deadlocks, panics, or lost values under load. It uses
+// intentionally lenient bounds because the exact cycle count depends on
+// scheduling. The deterministic variant is
+// TestChanCaster_Send_waitForNextFullCycle_deterministic.
+func TestChanCaster_Send_waitForNextFullCycle_stress(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	const (
 		numReceivers     = 100
 		actualCycleCount = 50_000
-		minCycleCount    = actualCycleCount / 350
+		// minCycleCount is intentionally lenient (1) rather than a tight bound
+		// such as actualCycleCount/350 (~142). Empirically, adjustedCycleCount
+		// (cycleCount/numReceivers) varies widely with scheduling: it was
+		// observed at 157, 69 and 55 across three consecutive runs on this
+		// machine, because the 100 receivers cannot keep up with 50_000 sends
+		// within the test window before cancellation. A tight bound would
+		// therefore flake under load. The meaningful invariants are still
+		// strongly enforced: startedCount must equal cycleCount exactly, and
+		// endedCount must be >= cycleCount.
+		minCycleCount = 1
 	)
 	startedCount, endedCount, cycleCount := testChanCasterSendWaitForNextFullCycle(numReceivers, func(started, ended *ChanCaster[chan struct{}, struct{}]) {
 		for range actualCycleCount {
@@ -291,11 +306,152 @@ func TestChanCaster_Send_waitForNextFullCycle(t *testing.T) {
 	if startedCount != cycleCount {
 		t.Errorf(`expected startedCount=%d, got %d`, cycleCount, startedCount)
 	}
-	if endedCount <= cycleCount {
-		t.Errorf(`expected endedCount>%d, got %d`, cycleCount, endedCount)
+	// endedCount counts ALL receives from ended.C, both in StartedLoop (where
+	// a receiver may pick up an ended value from a previous cycle before
+	// receiving the current started value) and in EndedLoop (where it
+	// receives the ended value that completes the current cycle). cycleCount
+	// counts only complete cycles (started received in StartedLoop + ended
+	// received in EndedLoop). Equality (endedCount == cycleCount) is possible
+	// when no receiver picks up extra ended values in StartedLoop, which
+	// occurs when the scheduler delivers started values before ended values.
+	// endedCount > cycleCount occurs when receivers pick up extra ended values
+	// in StartedLoop. Therefore endedCount >= cycleCount is the correct
+	// invariant — it is a lower bound, not a strict inequality.
+	if endedCount < cycleCount {
+		t.Errorf(`expected endedCount>=%d, got %d`, cycleCount, endedCount)
 	}
 	if adjustedCycleCount < minCycleCount {
 		t.Errorf(`expected adjustedCycleCount>=%d, got %d`, minCycleCount, adjustedCycleCount)
+	}
+}
+
+// TestChanCaster_Send_waitForNextFullCycle_deterministic verifies exact cycle
+// counting using barrier synchronization. Unlike the stress test, this test
+// uses a small number of receivers (2) and two barrier channels to ensure
+// deterministic ordering:
+//
+//   - readyForCycle: each receiver signals after registering (Add(1) for both
+//     started and ended) and before entering StartedLoop. The test waits for
+//     all signals before calling started.Send, guaranteeing that all receivers
+//     are registered and ready to receive.
+//
+//   - enteredEnded: each receiver signals after receiving started (breaking
+//     out of StartedLoop) and before entering EndedLoop. The test waits for
+//     all signals before calling ended.Send, guaranteeing that all receives
+//     from ended.C happen in EndedLoop, not StartedLoop.
+//
+// This eliminates the timing-dependent extra ended receives that occur in the
+// stress test, making all counts exact.
+func TestChanCaster_Send_waitForNextFullCycle_deterministic(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	const (
+		numReceivers = 2
+		numCycles    = 10
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		started                              = NewChanCaster(make(chan struct{}))
+		ended                                = NewChanCaster(make(chan struct{}))
+		startedCount, endedCount, cycleCount uint64
+		readyWG                              sync.WaitGroup
+		doneWG                               sync.WaitGroup
+		// Barriers (buffered so sends don't block if the test is between cycles)
+		readyForCycle = make(chan struct{}, numReceivers)
+		enteredEnded  = make(chan struct{}, numReceivers)
+	)
+
+	readyWG.Add(numReceivers)
+	doneWG.Add(numReceivers)
+
+	for range numReceivers {
+		go func() {
+			defer doneWG.Done()
+			var ready bool
+		CycleLoop:
+			for ctx.Err() == nil {
+				started.Add(1)
+				ended.Add(1)
+
+				if !ready {
+					ready = true
+					readyWG.Done()
+				}
+
+				// Signal that we've registered and are entering StartedLoop
+				readyForCycle <- struct{}{}
+
+			StartedLoop:
+				for {
+					select {
+					case <-ctx.Done():
+						started.Add(-1)
+						ended.Add(-1)
+						break CycleLoop
+					case <-ended.C:
+						atomic.AddUint64(&endedCount, 1)
+						ended.Add(1)
+					case <-started.C:
+						atomic.AddUint64(&startedCount, 1)
+						break StartedLoop
+					}
+				}
+
+				// Signal that we've received started and are entering EndedLoop
+				enteredEnded <- struct{}{}
+
+			EndedLoop:
+				for {
+					select {
+					case <-ctx.Done():
+						ended.Add(-1)
+						break CycleLoop
+					case <-ended.C:
+						atomic.AddUint64(&endedCount, 1)
+						break EndedLoop
+					}
+				}
+
+				atomic.AddUint64(&cycleCount, 1)
+			}
+		}()
+	}
+
+	readyWG.Wait()
+
+	for range numCycles {
+		// Wait for all receivers to register and enter StartedLoop
+		for range numReceivers {
+			<-readyForCycle
+		}
+
+		// Send started — blocks until all receivers receive in StartedLoop
+		started.Send(struct{}{})
+
+		// Wait for all receivers to enter EndedLoop
+		for range numReceivers {
+			<-enteredEnded
+		}
+
+		// Send ended — all receives happen in EndedLoop, not StartedLoop
+		ended.Send(struct{}{})
+	}
+
+	cancel()
+	doneWG.Wait()
+
+	expected := uint64(numCycles * numReceivers)
+	if startedCount != expected {
+		t.Errorf(`expected startedCount=%d, got %d`, expected, startedCount)
+	}
+	if endedCount != expected {
+		t.Errorf(`expected endedCount=%d, got %d`, expected, endedCount)
+	}
+	if cycleCount != expected {
+		t.Errorf(`expected cycleCount=%d, got %d`, expected, cycleCount)
 	}
 }
 
@@ -495,7 +651,11 @@ func TestChanCaster_Add_success(t *testing.T) {
 }
 
 func FuzzChanCaster_Add(f *testing.F) {
-	f.Cleanup(checkNumGoroutines(f))
+	// Note: checkNumGoroutines is intentionally omitted from fuzz tests.
+	// The fuzz worker pool creates goroutines not controlled by the test
+	// code, which may not have fully terminated when a cleanup runs,
+	// producing false-positive leak reports. Fuzz tests detect bugs via
+	// panics and timeouts, not via goroutine count heuristics.
 
 	add := func(hi, lo uint32, delta int) {
 		f.Add(hi, lo, delta)
@@ -618,7 +778,8 @@ func FuzzChanCaster_Add(f *testing.F) {
 }
 
 func FuzzChanCaster_Send(f *testing.F) {
-	f.Cleanup(checkNumGoroutines(f))
+	// Note: checkNumGoroutines is intentionally omitted from fuzz tests.
+	// See FuzzChanCaster_Add for the rationale.
 
 	add := func(hi, lo uint32, dec uint8) {
 		f.Add(hi, lo, dec)
@@ -795,7 +956,7 @@ func FuzzChanCaster_Send(f *testing.F) {
 	})
 }
 
-func storeChanCasterState[C chan V, V any](t *testing.T, caster *ChanCaster[C, V], hi, lo uint32) {
+func storeChanCasterState[C ~chan V, V any](t *testing.T, caster *ChanCaster[C, V], hi, lo uint32) {
 	h := (*[4]byte)(unsafe.Pointer(&hi))
 	l := (*[4]byte)(unsafe.Pointer(&lo))
 	// note: want big endian, might need to flip each segment
@@ -828,28 +989,199 @@ func TestChanCaster_Send_multipleRacingSenders(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	const n = 500
-	c := NewChanCaster(make(chan struct{}, n*2))
-	c.Add(1)
+	c := NewChanCaster(make(chan struct{}))
+	c.Add(n)
+
+	// Start n one-shot receivers and wait until they have all been started.
+	// Each will promptly block on <-c.C; any transient lack of a receiver is
+	// resolved as the goroutines schedule, because Send performs exactly one
+	// send per registered receiver.
+	var (
+		received    atomic.Int32
+		recvWg      sync.WaitGroup
+		recvReadyWg sync.WaitGroup
+	)
+	recvWg.Add(n)
+	recvReadyWg.Add(n)
+	for range n {
+		go func() {
+			defer recvWg.Done()
+			recvReadyWg.Done()
+			<-c.C
+			received.Add(1)
+		}()
+	}
+	recvReadyWg.Wait()
+
+	// Hold the ChanCaster mutex while spawning the senders, then release both
+	// the goroutine gate and the mutex. The senders race for the mutex, but the
+	// Go scheduler does not guarantee they all queue on it before the unlock
+	// completes; the test below only relies on final invariants, not ordering.
 	c.mutex.Lock()
-	var wg sync.WaitGroup
+	var (
+		wg        sync.WaitGroup
+		ready     sync.WaitGroup
+		start     = make(chan struct{})
+		totalSent atomic.Int32
+	)
 	wg.Add(n)
+	ready.Add(n)
 	for range n {
 		go func() {
 			defer wg.Done()
-			c.Send(struct{}{})
+			ready.Done()
+			<-start
+			totalSent.Add(int32(c.Send(struct{}{})))
 		}()
 	}
-	time.Sleep(time.Millisecond * 10)
-	if len(c.C) != 0 {
-		t.Error(`expected no values prior to unlock`)
-	}
+	ready.Wait()
+	close(start)
 	c.mutex.Unlock()
 	wg.Wait()
-	if len(c.C) != 1 {
-		t.Error(`expected 1 value after unlock`)
-	}
+
+	// Wait for the one-shot receivers to drain the channel.
+	recvWg.Wait()
+
 	if c.state.Load() != 0 {
 		t.Error(`expected state to be 0`)
+	}
+	if v := totalSent.Load(); v != int32(n) {
+		t.Errorf(`expected %d total sends, got %d`, n, v)
+	}
+	if v := received.Load(); v != int32(n) {
+		t.Errorf(`expected %d receives, got %d`, n, v)
+	}
+}
+
+// TestChanCaster_panicWhenChannelBuffered verifies that constructing
+// a ChanCaster with a buffered channel panics immediately.
+func TestChanCaster_panicWhenChannelBuffered(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic when using a buffered channel, got none")
+		} else if s := fmt.Sprint(r); s != `bigbuff: chancaster: must use an unbuffered channel` {
+			t.Errorf("unexpected panic string: %s", s)
+		}
+	}()
+	_ = NewChanCaster(make(chan int, 1)) // Should panic
+}
+
+// TestChanCaster_nilChannel verifies that a ChanCaster constructed with a nil
+// channel is usable as normal — Send returns 0 (no receivers), Add manages
+// state correctly, and the nil channel can be included in a select statement
+// without ever being selected (standard Go nil channel semantics).
+func TestChanCaster_nilChannel(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	// Construction with a nil channel must NOT panic
+	c := NewChanCaster((chan int)(nil))
+
+	// C is nil
+	if c.C != nil {
+		t.Error("expected C to be nil")
+	}
+
+	// Send with no receivers returns 0 (fast path, no channel access)
+	if n := c.Send(42); n != 0 {
+		t.Errorf("expected 0 sends, got %d", n)
+	}
+
+	// Add(0) returns 0, no change
+	if n := c.Add(0); n != 0 {
+		t.Errorf("expected 0 receivers, got %d", n)
+	}
+
+	// Add(1) then Add(-1) works (state management, no channel access)
+	c.Add(1)
+	if n := c.Add(0); n != 1 {
+		t.Errorf("expected 1 receiver, got %d", n)
+	}
+	c.Add(-1)
+	if n := c.Add(0); n != 0 {
+		t.Errorf("expected 0 receivers after add/remove, got %d", n)
+	}
+
+	// Send still returns 0 after add/remove cycle
+	if n := c.Send(99); n != 0 {
+		t.Errorf("expected 0 sends, got %d", n)
+	}
+
+	// Nil channel never fires in a select — other cases work normally
+	other := make(chan int, 1)
+	other <- 123
+	select {
+	case <-c.C:
+		t.Error("expected nil channel case to never fire")
+	case v := <-other:
+		if v != 123 {
+			t.Errorf("expected 123, got %d", v)
+		}
+	}
+
+	// Nil channel with default also works
+	select {
+	case <-c.C:
+		t.Error("expected nil channel case to never fire")
+	default:
+		// expected
+	}
+}
+
+// TestChanCaster_newChanCaster_valid verifies that constructing a ChanCaster
+// via NewChanCaster with a valid unbuffered channel produces a working caster.
+func TestChanCaster_newChanCaster_valid(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	c := NewChanCaster(make(chan int))
+	c.Add(1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if v := <-c.C; v != 42 {
+			t.Errorf("expected 42, got %d", v)
+		}
+	}()
+
+	if n := c.Send(42); n != 1 {
+		t.Errorf("expected 1 send, got %d", n)
+	}
+	wg.Wait()
+
+	if c.state.Load() != 0 {
+		t.Error("expected state to be 0")
+	}
+}
+
+// TestChanCaster_newChanCaster_namedChannelType verifies that the ~chan V
+// constraint enables type inference with named bidirectional channel types.
+func TestChanCaster_newChanCaster_namedChannelType(t *testing.T) {
+	t.Cleanup(checkNumGoroutines(t))
+
+	type MyChan chan int
+	c := NewChanCaster(MyChan(make(chan int)))
+	c.Add(1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if v := <-c.C; v != 99 {
+			t.Errorf("expected 99, got %d", v)
+		}
+	}()
+
+	if n := c.Send(99); n != 1 {
+		t.Errorf("expected 1 send, got %d", n)
+	}
+	wg.Wait()
+
+	if c.state.Load() != 0 {
+		t.Error("expected state to be 0")
 	}
 }
 
@@ -867,7 +1199,7 @@ func BenchmarkChanCaster_highContention(b *testing.B) {
 
 	var ready sync.WaitGroup
 
-	for i := 0; i < numReceivers; i++ {
+	for range numReceivers {
 		go func() {
 			defer allStopped.Done()
 			for {

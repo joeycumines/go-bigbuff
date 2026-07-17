@@ -53,7 +53,7 @@ func TestLinearAttempt_single(t *testing.T) {
 	if v, ok := r.TryRecv(); !ok {
 		t.Fatal(v, ok)
 	}
-	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeOf(time.Time{}) {
+	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeFor[time.Time]() {
 		t.Fatal(v, ok)
 	}
 }
@@ -74,7 +74,7 @@ func TestLinearAttempt_closed(t *testing.T) {
 	cancel()
 	c := LinearAttempt(ctx, 1, 999)
 	r := reflect.ValueOf(c)
-	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeOf(time.Time{}) {
+	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeFor[time.Time]() {
 		t.Fatal(v, ok)
 	}
 }
@@ -108,11 +108,11 @@ func TestLinearAttempt_immediateReceiveCloseAfter(t *testing.T) {
 	}
 	cancel()
 	time.Sleep(time.Millisecond * 100)
-	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeOf(time.Time{}) {
+	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeFor[time.Time]() {
 		t.Fatal(v, ok)
 	}
 	time.Sleep(time.Millisecond * 100)
-	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeOf(time.Time{}) {
+	if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeFor[time.Time]() {
 		t.Fatal(v, ok)
 	}
 }
@@ -134,7 +134,7 @@ func ExampleLinearAttempt_full() {
 		fmt.Println(int64((time.Now().Sub(start) + (time.Millisecond * 100)) / (time.Millisecond * 200)))
 	}
 	time.Sleep(time.Millisecond * 300)
-	//output:
+	// Output:
 	//0
 	//1
 	//2
@@ -162,7 +162,7 @@ func ExampleLinearAttempt_slowConsumer() {
 				fmt.Println(int64((time.Now().Sub(start)+(time.Millisecond*100))/(time.Millisecond*200)), int64((ts.Sub(start)+(time.Millisecond*100))/(time.Millisecond*200)))
 			}, func() {
 				r := reflect.ValueOf(c)
-				if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeOf(time.Time{}) {
+				if v, ok := r.TryRecv(); ok || v.Type() != reflect.TypeFor[time.Time]() {
 					panic(c)
 				}
 			}
@@ -178,7 +178,7 @@ func ExampleLinearAttempt_slowConsumer() {
 	r()
 	r()
 	r()
-	//output:
+	// Output:
 	//2 0
 	//2 2
 	//3 3
@@ -215,7 +215,7 @@ func ExampleLinearAttempt_atMostOneTickAfterCancel() {
 		fmt.Println(`canceled...`)
 	}
 	fmt.Printf("%d iterations\n", i)
-	//output:
+	// Output:
 	//iteration #1
 	//iteration #2
 	//iteration #3

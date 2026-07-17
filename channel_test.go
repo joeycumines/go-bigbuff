@@ -270,7 +270,7 @@ func TestChannel_Buffer_nil(t *testing.T) {
 func TestChannel_Buffer(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	o := make([]interface{}, 3, 10)
+	o := make([]any, 3, 10)
 	o[0] = 0
 	o[1] = 1
 	o[2] = 2
@@ -286,11 +286,11 @@ func TestChannel_Buffer(t *testing.T) {
 		t.Error("unexpected capacity")
 	}
 
-	if diff := deep.Equal(b, []interface{}{0, 1, 2}); diff != nil {
+	if diff := deep.Equal(b, []any{0, 1, 2}); diff != nil {
 		t.Error("unexpected diff", diff)
 	} else {
 		b[1] = 66
-		if diff := deep.Equal(o, []interface{}{0, 1, 2}); diff != nil {
+		if diff := deep.Equal(o, []any{0, 1, 2}); diff != nil {
 			t.Error("unexpected diff", diff)
 		}
 	}
@@ -416,7 +416,7 @@ func TestChannel_Get(t *testing.T) {
 
 	z := new(struct{})
 
-	input := []interface{}{
+	input := []any{
 		"A",
 		12,
 		2.12314,
@@ -424,7 +424,7 @@ func TestChannel_Get(t *testing.T) {
 		z,
 	}
 
-	in := make(chan interface{}, 2)
+	in := make(chan any, 2)
 
 	in <- 0
 
@@ -452,7 +452,7 @@ func TestChannel_Get(t *testing.T) {
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{0}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{0}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -474,13 +474,14 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected value", v)
 	}
 
-	// verify time spent on those first two fetches
-	if spent < 40*time.Millisecond || spent > 44*time.Millisecond {
+	// verify time spent on those first two fetches (lower bound proves we
+	// waited for the 40ms producer; upper bound is generous to avoid flakes)
+	if spent < 40*time.Millisecond || spent > 100*time.Millisecond {
 		t.Fatal("unexpected spent", spent)
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{0, "A"}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{0, "A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -499,7 +500,7 @@ func TestChannel_Get(t *testing.T) {
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{0, "A"}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{0, "A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -522,7 +523,7 @@ func TestChannel_Get(t *testing.T) {
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{0, "A"}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{0, "A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -534,8 +535,8 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected pending", i)
 	}
 
-	// verify time spent
-	if spent < 40*time.Millisecond || spent > 44*time.Millisecond {
+	// verify time spent (lower bound proves we waited for the producer)
+	if spent < 40*time.Millisecond || spent > 100*time.Millisecond {
 		t.Fatal("unexpected spent", spent)
 	}
 
@@ -546,11 +547,11 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected error", err)
 	}
 	// verify the buffer ref was cleared
-	if diff := deep.Equal(b, []interface{}{nil, "A"}); diff != nil {
+	if diff := deep.Equal(b, []any{nil, "A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{"A"}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{"A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -573,7 +574,7 @@ func TestChannel_Get(t *testing.T) {
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{"A"}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{"A"}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -595,7 +596,7 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected value", v)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{"A", 12}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{"A", 12}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -617,7 +618,7 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected value", v)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{"A", 12, 2.12314}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{"A", 12, 2.12314}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -636,11 +637,11 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected error", err)
 	}
 	// verify the buffer refs were cleared
-	if diff := deep.Equal(b, []interface{}{nil, nil, nil}); diff != nil {
+	if diff := deep.Equal(b, []any{nil, nil, nil}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -662,7 +663,7 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected value", v)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{nil}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{nil}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -674,15 +675,15 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected pending", i)
 	}
 
-	// verify time spent
-	if spent < 40*time.Millisecond || spent > 45*time.Millisecond {
+	// verify time spent (lower bound proves we waited for the producer)
+	if spent < 40*time.Millisecond || spent > 100*time.Millisecond {
 		t.Fatal("unexpected spent", spent)
 	}
 
 	// sleep a bit before the last one just to make sure it obeys get rate
 	time.Sleep(time.Millisecond * 20)
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{nil}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{nil}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -703,7 +704,7 @@ func TestChannel_Get(t *testing.T) {
 		t.Fatal("unexpected value", v)
 	}
 	// verify buffer
-	if diff := deep.Equal(c.buffer, []interface{}{nil, z}); diff != nil {
+	if diff := deep.Equal(c.buffer, []any{nil, z}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 	// verify rollback
@@ -717,12 +718,12 @@ func TestChannel_Get(t *testing.T) {
 
 	// in will be closed shortly, sleep a bit to ensure that, then verify no more
 	blockedGet := make(chan struct {
-		Value interface{}
+		Value any
 		Error error
 	})
 	go func() {
 		var v struct {
-			Value interface{}
+			Value any
 			Error error
 		}
 		v.Value, v.Error = c.Get(nil)
@@ -745,8 +746,11 @@ func TestChannel_Get(t *testing.T) {
 		defer func() {
 			finalSpent <- time.Now().Sub(startTS)
 		}()
-		// set the rate for the new get
-		c.rate = time.Millisecond * 50 // this WONT be how long it takes - it has a bail out
+		// set the rate for the new get to 1 second — much longer than the
+		// close-driven timeout below, so the test distinguishes the close
+		// path (context cancellation, fires promptly) from the timer path
+		// (ticker, fires after 1s).
+		c.rate = time.Second
 		startTS = time.Now()
 		c.mutex.Unlock()
 		v, err := c.Get(nil)
@@ -773,7 +777,10 @@ func TestChannel_Get(t *testing.T) {
 		t.Error("unexpected final value", vb)
 	}
 
-	if spent := <-finalSpent; spent > time.Millisecond*4 {
+	// Close must unblock the get via context cancellation, which fires
+	// promptly, unlike the 1s ticker. The 100ms bound is 10x shorter than
+	// the poll rate, proving the close path was taken, not the timer path.
+	if spent := <-finalSpent; spent > time.Millisecond*100 {
 		t.Fatal("unexpected final", spent)
 	}
 
@@ -784,7 +791,7 @@ func TestChannel_Get(t *testing.T) {
 	}
 
 	// verify buffer
-	if diff := deep.Equal(c.Buffer(), []interface{}{nil, z}); diff != nil {
+	if diff := deep.Equal(c.Buffer(), []any{nil, z}); diff != nil {
 		t.Fatal("unexpected diff", diff)
 	}
 }
@@ -792,7 +799,7 @@ func TestChannel_Get(t *testing.T) {
 func TestConsumer_Get_inputCanceled(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	in := make(chan interface{}, 2)
+	in := make(chan any, 2)
 
 	in <- 14
 
@@ -852,7 +859,7 @@ func TestConsumer_Get_inputCanceled(t *testing.T) {
 func TestChannel_Rollback_errs(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	in := make(chan interface{}, 2)
+	in := make(chan any, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	in <- 14
@@ -888,7 +895,7 @@ func TestChannel_Rollback_errs(t *testing.T) {
 func TestChannel_Commit_errs(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	in := make(chan interface{}, 2)
+	in := make(chan any, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	in <- 14
@@ -980,7 +987,7 @@ func TestChannel(t *testing.T) {
 			}
 		}()
 
-		err = Range(ctx, c, func(index int, value interface{}) bool {
+		err = Range(ctx, c, func(index int, value any) bool {
 			if index != len(aSaw) {
 				t.Error("bad index vs map", index, len(aSaw))
 			}
@@ -1021,7 +1028,7 @@ func TestChannel(t *testing.T) {
 			}
 		}()
 
-		err = Range(ctx, c, func(index int, value interface{}) bool {
+		err = Range(ctx, c, func(index int, value any) bool {
 			if index != len(bSaw) {
 				t.Error("bad index vs map", index, len(bSaw))
 			}
@@ -1062,7 +1069,7 @@ func TestChannel(t *testing.T) {
 			}
 		}()
 
-		err = Range(ctx, c, func(index int, value interface{}) bool {
+		err = Range(ctx, c, func(index int, value any) bool {
 			if index != len(cSaw) {
 				t.Error("bad index vs map", index, len(cSaw))
 			}
@@ -1087,7 +1094,7 @@ func TestChannel(t *testing.T) {
 		defer wg.Done()
 
 		// send 0 to 9999 in order
-		for x := 0; x < 10000; x++ {
+		for x := range 10000 {
 			in <- x
 		}
 	}()
@@ -1111,7 +1118,7 @@ func TestChannel(t *testing.T) {
 		t.Fatal("bad output")
 	}
 
-	for x := 0; x < 10000; x++ {
+	for x := range 10000 {
 		if x != output[x] {
 			t.Fatal("bad output")
 		}

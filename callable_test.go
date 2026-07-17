@@ -57,7 +57,7 @@ func ExampleCall_rpc() {
 				return
 			}),
 		}
-		call = func(name string, args ...interface{}) (results []interface{}) {
+		call = func(name string, args ...any) (results []any) {
 			MustCall(
 				methods[name],
 				CallArgs(args...),
@@ -65,8 +65,8 @@ func ExampleCall_rpc() {
 			)
 			return
 		}
-		p = func(name string, args ...interface{}) {
-			results := func() (v interface{}) {
+		p = func(name string, args ...any) {
+			results := func() (v any) {
 				defer func() {
 					if v == nil {
 						v = recover()
@@ -91,7 +91,7 @@ func ExampleCall_rpc() {
 	p(`add`, 1, 2.0)
 	p(`bounds`, 2.0)
 
-	//output:
+	// Output:
 	//success:
 	//add [1 2] -> [3]
 	//bounds [-123884 4737 9 0 -99999992 4 6 8324884383 -3] -> [-99999992 8324884383 true]
@@ -107,7 +107,7 @@ func ExampleCall_rpc() {
 func TestNewCallable_notFunc(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	for i, v := range []interface{}{
+	for i, v := range []any{
 		1,
 		nil,
 		new(func()),
@@ -130,7 +130,7 @@ func TestNewCallable_notFunc(t *testing.T) {
 func TestNewCallable_nilValue(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	for i, v := range []interface{}{
+	for i, v := range []any{
 		(func())(nil),
 		(func(bool) bool)(nil),
 	} {
@@ -156,7 +156,7 @@ func ExampleCallArgs_funcResults() {
 		NewCallable(fmt.Println),
 		CallArgs(func() (int, string, bool) { return 3, `multiple return values -> varargs`, true }()),
 	)
-	//output:
+	// Output:
 	//3 multiple return values -> varargs true
 }
 
@@ -165,7 +165,7 @@ func TestCallArgs_funcResults(t *testing.T) {
 
 	var output string
 	MustCall(
-		NewCallable(func(a int, b interface{}, c bool) error {
+		NewCallable(func(a int, b any, c bool) error {
 			output = strings.TrimSpace(fmt.Sprintln(a, b, c))
 			return errors.New(`some error ignored`)
 		}),
@@ -400,7 +400,7 @@ func (m *mockCallable) Type() reflect.Type { return m.t() }
 func TestCall_notFunc(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	if err := Call(&mockCallable{t: func() reflect.Type { return reflect.TypeOf(1) }}); err == nil || err.Error() != `bigbuff.Call type error: not func: int` {
+	if err := Call(&mockCallable{t: func() reflect.Type { return reflect.TypeFor[int]() }}); err == nil || err.Error() != `bigbuff.Call type error: not func: int` {
 		t.Error(err)
 	}
 }
@@ -429,7 +429,7 @@ func TestCallResults_correctResults(t *testing.T) {
 
 	var (
 		a, b int
-		c    interface{}
+		c    any
 	)
 	if err := Call(NewCallable(func() (a, b, c int) {
 		return
@@ -469,7 +469,7 @@ func ExampleCallable_Call_results() {
 	if err := NewCallable(func() (bool, int, []string) { return true, 6, []string{`a`, `b`} }).Call(nil, fmt.Println); err != nil {
 		panic(err)
 	}
-	//output:
+	// Output:
 	//true 6 [a b]
 }
 
@@ -518,7 +518,7 @@ type callPassTester struct {
 	validate func(x callConfig)
 }
 
-func callPass(args, results []interface{}) CallOption {
+func callPass(args, results []any) CallOption {
 	opts := []CallOption{
 		CallArgs(args...),
 		CallResults(results...),
@@ -533,9 +533,9 @@ func callPass(args, results []interface{}) CallOption {
 	}
 }
 
-func (x callPassTester) f1(a int, b *bool, c interface{}, d fmt.Stringer) (e string, f *int, g interface{}, h io.Reader) {
-	x.config.this = reflect.TypeOf(x.f1)
-	if err := callPass([]interface{}{a, b, c, d}, []interface{}{&e, &f, &g, &h})(&x.config); err != nil {
+func (x callPassTester) f1(a int, b *bool, c any, d fmt.Stringer) (e string, f *int, g any, h io.Reader) {
+	x.config.this = reflect.TypeFor[func(a int, b *bool, c any, d fmt.Stringer) (e string, f *int, g any, h io.Reader)]()
+	if err := callPass([]any{a, b, c, d}, []any{&e, &f, &g, &h})(&x.config); err != nil {
 		panic(err)
 	}
 	x.validate(x.config)
@@ -550,15 +550,15 @@ func Test_callPass_f1(t *testing.T) {
 		e, f, g, h                         = `456`, 789, make(chan struct{}), new(bytes.Reader)
 		actualA                            int
 		actualB                            *bool
-		actualC                            interface{}
+		actualC                            any
 		actualD                            fmt.Stringer
 		actualE, actualF, actualG, actualH = (callPassTester{validate: func(config callConfig) {
-			if fn, ok := config.args.(func() (int, *bool, interface{}, fmt.Stringer)); !ok {
+			if fn, ok := config.args.(func() (int, *bool, any, fmt.Stringer)); !ok {
 				t.Errorf(`%T`, config.args)
 			} else {
 				actualA, actualB, actualC, actualD = fn()
 			}
-			if fn, ok := config.results.(func(string, *int, interface{}, io.Reader)); !ok {
+			if fn, ok := config.results.(func(string, *int, any, io.Reader)); !ok {
 				t.Errorf(`%T`, config.results)
 			} else {
 				fn(e, &f, g, h)

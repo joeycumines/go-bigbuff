@@ -199,7 +199,7 @@ func TestSeq_MultipleValues(t *testing.T) {
 	}
 
 	// First 3 errors should be nil, last should be "done"
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if i < len(errors) && errors[i] != nil {
 			t.Errorf("errors[%d]: expected nil, got %v", i, errors[i])
 		}
