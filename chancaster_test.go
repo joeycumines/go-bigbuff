@@ -166,12 +166,13 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	stateStr := func() string {
 		state := b.state.Load()
 		receivers := int32(state >> 32)
-		remaining := int64(uint32(state)) - math.MaxInt32
+		sending := state&(1<<31) != 0
+		lo := uint32(state & 0x7fffffff)
 		s := strconv.FormatUint(state, 2)
 		if len(s) < 64 {
 			s = fmt.Sprintf("%0[2]*[1]s", s, 64)
 		}
-		return fmt.Sprintf(`receivers: %d, remaining: %d, state: %s|%s`, receivers, remaining, s[:32], s[32:])
+		return fmt.Sprintf(`receivers: %d, sending: %t, lo: %d, state: %s|%s`, receivers, sending, lo, s[:32], s[32:])
 	}
 
 	send := func(v int) {
@@ -235,22 +236,22 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	fmt.Println(`final num receivers:`, stateStr())
 
 	// Unordered output:
-	//state before send: receivers: 3, remaining: -2147483644, state: 00000000000000000000000000000011|00000000000000000000000000000011
+	//state before send: receivers: 3, sending: false, lo: 3, state: 00000000000000000000000000000011|00000000000000000000000000000011
 	//received: 1
 	//received: 1
 	//received: 1
 	//sent value 1 was received by non-decrement 3 times
-	//state after send: receivers: 0, remaining: -2147483647, state: 00000000000000000000000000000000|00000000000000000000000000000000
+	//state after send: receivers: 0, sending: false, lo: 0, state: 00000000000000000000000000000000|00000000000000000000000000000000
 	//sent value 213 was received by non-decrement 0 times
 	//received: 2
 	//received: 2
 	//received: 2
 	//sent value 2 was received by non-decrement 3 times
 	//received: 3
-	//state after canceling mid send: receivers: 2, remaining: 2, state: 00000000000000000000000000000010|10000000000000000000000000000001
+	//state after canceling mid send: receivers: 2, sending: true, lo: 2, state: 00000000000000000000000000000010|10000000000000000000000000000010
 	//received: 3
 	//sent value 3 was received by non-decrement 2 times
-	//final num receivers: receivers: 0, remaining: -2147483647, state: 00000000000000000000000000000000|00000000000000000000000000000000
+	//final num receivers: receivers: 0, sending: false, lo: 0, state: 00000000000000000000000000000000|00000000000000000000000000000000
 }
 
 var dontElideMe any
@@ -596,10 +597,10 @@ func TestChanCaster_Add_success(t *testing.T) {
 	assertAdd(-1, 0)
 	assertState(0, 0)
 
-	c.state.Store(5<<32 | (math.MaxInt32 + 5))
-	assertState(5, math.MaxInt32+5)
+	c.state.Store(5<<32 | (1 << 31) | 5)
+	assertState(5, 1<<31|5)
 	assertAdd(0, 5)
-	assertState(5, math.MaxInt32+5)
+	assertState(5, 1<<31|5)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -610,7 +611,7 @@ func TestChanCaster_Add_success(t *testing.T) {
 	c.C <- 0
 	c.C <- 0
 	wg.Wait()
-	assertState(3, math.MaxInt32+3)
+	assertState(3, 1<<31|3)
 
 	wg.Add(1)
 	go func() {
@@ -621,13 +622,13 @@ func TestChanCaster_Add_success(t *testing.T) {
 	c.C <- 0
 	c.C <- 0
 	wg.Wait()
-	assertState(0, math.MaxInt32+0)
+	assertState(0, 1<<31)
 
-	c.state.Store(math.MaxInt32<<32 | (math.MaxInt32 * 2))
-	assertState(math.MaxInt32, math.MaxInt32*2)
+	c.state.Store(math.MaxInt32<<32 | (1 << 31) | math.MaxInt32)
+	assertState(math.MaxInt32, 1<<31|math.MaxInt32)
 
 	assertAdd(0, math.MaxInt32)
-	assertState(math.MaxInt32, math.MaxInt32*2)
+	assertState(math.MaxInt32, 1<<31|math.MaxInt32)
 
 	wg.Add(1)
 	go func() {
@@ -636,7 +637,7 @@ func TestChanCaster_Add_success(t *testing.T) {
 	}()
 	c.C <- 0
 	wg.Wait()
-	assertState(math.MaxInt32-1, math.MaxInt32*2-1)
+	assertState(math.MaxInt32-1, 1<<31|math.MaxInt32-1)
 
 	wg.Add(1)
 	go func() {
@@ -647,7 +648,7 @@ func TestChanCaster_Add_success(t *testing.T) {
 		c.C <- 0
 	}
 	wg.Wait()
-	assertState(math.MaxInt32-300, math.MaxInt32*2-300)
+	assertState(math.MaxInt32-300, 1<<31|math.MaxInt32-300)
 }
 
 func FuzzChanCaster_Add(f *testing.F) {
@@ -669,33 +670,37 @@ func FuzzChanCaster_Add(f *testing.F) {
 	add(0, 0, math.MaxInt32+1)
 	add(math.MaxInt32, math.MaxInt32, 0)
 	add(math.MaxInt32, math.MaxInt32, 0)
-	add(math.MaxInt32, math.MaxInt32*2, 0)
-	add(0, math.MaxInt32, 0)
+	add(math.MaxInt32, 1<<31|math.MaxInt32, 0)
+	add(0, 1<<31, 0)
 	add(1, 0, 0)
-	add(1, math.MaxInt32, 0)
+	add(1, 1<<31, 0)
 	add(1, 1, -1)
 	add(1, 1, 1)
 	add(5, 5, 23023)
-	add(1, math.MaxInt32+1, -1)
-	add(1, math.MaxInt32+1, -2)
-	add(math.MaxInt32, math.MaxInt32*2, -10_000)
-	add(99, math.MaxInt32+99, -99)
-	add(99, math.MaxInt32+99, -100)
+	add(1, 1<<31|1, -1)
+	add(1, 1<<31|1, -2)
+	add(math.MaxInt32, 1<<31|math.MaxInt32, -10_000)
+	add(99, 1<<31|99, -99)
+	add(99, 1<<31|99, -100)
 	add(math.MaxInt32, math.MaxInt32, -math.MaxInt32)
 	add(math.MaxInt32, math.MaxInt32, -math.MaxInt32-1)
 	add(math.MaxUint32, math.MaxUint32, 0)
 	add(math.MaxUint32-129239, math.MaxUint32-129239, 1)
 	add(math.MaxUint32-129239, math.MaxUint32-129239, -1)
-	add(math.MaxInt32+1, math.MaxInt32*2+1, -1)
+	add(math.MaxInt32+1, 1<<31|(math.MaxInt32+1), -1)
 
 	f.Fuzz(func(t *testing.T, hi, lo uint32, delta int) {
 		caster := NewChanCaster(make(chan struct{}))
 
 		storeChanCasterState(t, caster, hi, lo)
 
-		// ensure we don't try and acquire the write lock, just because
-		caster.mutex.RLock()
-		defer caster.mutex.RUnlock()
+		// Positive Add parks on caster.mutex while a send is mid-flight, so it
+		// must not be called with the mutex held. Negative/zero Add never takes
+		// the mutex, and holding it here proves Add does not need it.
+		if delta <= 0 {
+			caster.mutex.Lock()
+			defer caster.mutex.Unlock()
+		}
 
 		// high-level delta validity rules (also dependent on state validity):
 		deltaValid := delta >= -math.MaxInt32 && delta <= math.MaxInt32 // one more check below
@@ -712,7 +717,11 @@ func FuzzChanCaster_Add(f *testing.F) {
 		}
 
 		// the rules for determining validity of the state (inclusive of no write lock) are simply:
-		stateValid := hi <= math.MaxInt32 && (lo == hi || (delta <= 0 && lo == hi+math.MaxInt32))
+		stateValid := hi <= math.MaxInt32 && (lo == hi || (delta <= 0 && lo == hi|(1<<31)))
+		// note: a mid-send state (bit 31 set) is only reachable while a Send is
+		// broadcasting, which the fuzz harness never runs concurrently — positive
+		// and zero deltas against it must panic, exactly as negative deltas against
+		// an underflowed state must panic.
 
 		var success bool
 		if !deltaValid || !stateValid { // expect panic
@@ -765,9 +774,10 @@ func FuzzChanCaster_Add(f *testing.F) {
 		expectedBytes := make([]byte, 8)
 		new(big.Int).SetInt64(expected).FillBytes(expectedBytes[:4])
 		{
+			// the low word mirrors the receiver count, plus bit 31 while sending
 			v := expected
 			if lo != hi {
-				v += math.MaxInt32
+				v |= 1 << 31
 			}
 			new(big.Int).SetInt64(v).FillBytes(expectedBytes[4:])
 		}
@@ -788,21 +798,21 @@ func FuzzChanCaster_Send(f *testing.F) {
 	add(0, 0, 0)
 	add(0, 0, 1)
 	add(372, 372, 0)
-	add(math.MaxInt32, math.MaxInt32*2, 0)
-	add(0, math.MaxInt32, 0)
+	add(math.MaxInt32, math.MaxInt32, 0)
+	add(0, 0, 0)
 	add(1, 0, 0)
-	add(1, math.MaxInt32, 0)
+	add(1, 1, 0)
 	add(1, 1, 1)
 	add(5, 5, 222)
-	add(1, math.MaxInt32+1, 1)
-	add(1, math.MaxInt32+1, 2)
-	add(math.MaxInt32, math.MaxInt32*2, 200)
-	add(99, math.MaxInt32+99, 99)
-	add(99, math.MaxInt32+99, 100)
+	add(1, 1, 1)
+	add(1, 1, 2)
+	add(math.MaxInt32, math.MaxInt32, 200)
+	add(99, 99, 99)
+	add(99, 99, 100)
 	add(201, 201, 200)
 	add(99, 99, 99)
 	add(99, 99, 100)
-	add(math.MaxInt32, math.MaxInt32*2, math.MaxUint8)
+	add(math.MaxInt32, math.MaxInt32, math.MaxUint8)
 	add(1243, 923, 0)
 
 	f.Fuzz(func(t *testing.T, hi, lo uint32, dec uint8) {
@@ -902,8 +912,10 @@ func FuzzChanCaster_Send(f *testing.F) {
 
 					var success bool
 					if !validDec {
-						// simulate the correct number of receives
-						caster.state.Store(math.MaxInt32)
+						// simulate a mid-flight send that has already delivered all
+						// hi sends, so the remaining lo count is zero and Add(-1)
+						// underflows: hi=0, sending bit set, lo=0
+						caster.state.Store(1 << 31)
 
 						defer func() {
 							if success {

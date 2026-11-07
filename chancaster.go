@@ -22,14 +22,20 @@ import (
 	"sync/atomic"
 )
 
+const (
+	chanCasterMaxReceivers = math.MaxInt32
+	chanCasterSendingBit   = uint64(1) << 31
+	chanCasterLoMask       = uint64(0x7fffffff)
+)
+
 // ChanCaster supports broadcasting messages to multiple receivers, via a
 // single channel, without callbacks.
 //
 // The underlying channel C MUST be unbuffered (cap == 0). This is a hard
-// precondition of the implementation: [ChanCaster.Send] performs exactly one
-// synchronous send per registered receiver, relying on the one-to-one
-// send/receive semantics of an unbuffered channel to guarantee delivery. A
-// buffered channel would violate these invariants and can cause deadlocks or
+// precondition of the implementation: [ChanCaster.Send] performs synchronous
+// sends per registered receiver, relying on the one-to-one send/receive
+// semantics of an unbuffered channel to guarantee delivery. A buffered
+// channel would violate these invariants and can cause deadlocks or
 // undetected missed receives.
 //
 // A nil channel is permitted. It satisfies the cap == 0 requirement and
@@ -47,6 +53,28 @@ import (
 // ChanPubSub; unlike ChanPubSub, direct ChanCaster construction remains
 // supported and relies on the caller to preserve the invariant.
 //
+// # Architecture & Low-Level Mechanics
+//
+// ChanCaster encodes its entire synchronisation protocol into a single 64-bit
+// atomic word (`state`), paired with a slow-path mutex (`mutex`) that is
+// completely bypassed by [ChanCaster.Add] whenever a broadcast is not
+// actively mid-flight:
+//
+//   - Bits 32..63 (hi, uint32): Current count of active receivers in range
+//     [0, math.MaxInt32].
+//   - Bit 31 (`chanCasterSendingBit`): Set to 1 while [ChanCaster.Send] is
+//     actively broadcasting; 0 when idle.
+//   - Bits 0..30 (lo, 31-bit uint): Redundant mirror of the active receiver
+//     count (`hi`). Any divergence between `hi` and `lo` immediately exposes
+//     concurrent underflow, overflow, or state corruption via a single 64-bit
+//     two's complement addition.
+//
+// When [ChanCaster.Add] is called with a positive delta while idle
+// (`chanCasterSendingBit == 0`), it completes in a single lock-free CAS on
+// `state` without touching `mutex`. If a broadcast is in progress
+// (`chanCasterSendingBit == 1`), positive [ChanCaster.Add] calls fall back to
+// `mutex` to wait for the active broadcast batch to complete.
+//
 // See also [NewChanCaster] (optional).
 type ChanCaster[C ~chan V, V any] struct {
 	// C is the channel that will be used to broadcast messages.
@@ -54,21 +82,22 @@ type ChanCaster[C ~chan V, V any] struct {
 	// See [ChanCaster.Add] and [ChanCaster.Send] for usage details.
 	C C
 
-	// mutex synchronises [ChanCaster.Send] and [ChanCaster.Add] calls with
-	// positive deltas. Ensuring sends are mutually exclusive is fairly
+	// mutex synchronises [ChanCaster.Send] calls with positive-delta
+	// [ChanCaster.Add] calls. Ensuring sends are mutually exclusive is fairly
 	// important for consistency, but not strictly necessary. The primary
 	// purpose of this mutex is to avoid incrementing the number of receivers
 	// while any send is in progress, to facilitate removing receivers while
 	// send is in progress.
-	mutex sync.RWMutex
+	mutex sync.Mutex
+
 	// state synchronises the number of receivers, between [ChanCaster.Send]
 	// calls, and [ChanCaster.Add] calls with negative deltas.
 	// The high 32 bits are number of receivers (modeled as int32), while the
-	// low 32 bits are either identical, or [math.MaxInt32] + the number of
-	// receivers being (the value of the high 32 bits), if sending is in
-	// progress. Using an atomic value for synchronisation requires having the
-	// "is sending" information embedded in said value, and having two copies
-	// of the number of receivers makes invariant and overflow checks easier.
+	// low 31 bits are a mirror of the high bits, and bit 31 is the sending
+	// flag (set while a send is in progress). Using an atomic value for
+	// synchronisation requires having the "is sending" information embedded
+	// in said value, and having two copies of the number of receivers makes
+	// invariant and overflow checks easier.
 	state atomic.Uint64
 }
 
@@ -95,18 +124,17 @@ func NewChanCaster[C ~chan V, V any](channel C) *ChanCaster[C, V] {
 // See [ChanCaster.Add] for usage details.
 func (x *ChanCaster[C, V]) Send(value V) int {
 	if x.state.Load() == 0 {
-		return 0 // no receivers (fast path)
+		return 0 // no receivers (wait-free fast path)
 	}
 
-	// prevent receivers being added while sending + order values by send call
+	// Serialise concurrent Send calls and block slow-path positive Add calls
+	// once chanCasterSendingBit is armed.
 	x.mutex.Lock()
 	defer x.mutex.Unlock()
 
-	// load our state, guard no receivers (early exit), and set tracker to the
-	// value of `maxInt32 + receivers`, using CAS to sync with negative adds
 	var (
-		state              uint64
-		receivers, tracker uint32
+		state     uint64
+		receivers uint32
 	)
 	for {
 		state = x.state.Load()
@@ -114,38 +142,38 @@ func (x *ChanCaster[C, V]) Send(value V) int {
 			return 0 // no receivers (slow path)
 		}
 
-		receivers = uint32(state >> 32) // initialize from hi
-		tracker = uint32(state)         // initialize from lo
-		if tracker != receivers || receivers > math.MaxInt32 {
+		receivers = uint32(state >> 32)
+		lo := uint32(state & chanCasterLoMask)
+		if (state&chanCasterSendingBit) != 0 || lo != receivers || receivers > chanCasterMaxReceivers {
 			panic(`bigbuff: chancaster: send: state invariant violation`)
 		}
 
-		// attempt to set tracker to `maxInt32 + receivers`, with CAS used to
-		// synchronise with decrements of receivers
-		tracker += math.MaxInt32
-		if x.state.CompareAndSwap(state, uint64(receivers)<<32|uint64(tracker)) {
+		// Arm chanCasterSendingBit atomically. Once set, lock-free positive Add
+		// calls cannot succeed and will park on x.mutex.Lock() until we finish.
+		if x.state.CompareAndSwap(state, state|chanCasterSendingBit) {
 			break
 		}
 	}
 
-	// broadcast involves sending to all receivers - with the total actually
-	// received being in range [0, receivers], due to potential decrements
+	// Broadcast to all registered receivers. Negative Add calls occurring
+	// mid-flight will atomically decrement state and drain their corresponding
+	// send from x.C.
 	for range receivers {
-		x.C <- value // may end up received by negative Add calls
+		x.C <- value
 	}
 
-	// now, we can retrieve, validate, then reset the state (to 0 - all broadcast + we locked so none added)
-	// note: it should be stable - if it isn't, invariants were violated
+	// Retrieve, validate, and reset state to 0.
 	state = x.state.Load()
-	tracker = uint32(state >> 32) // actually the final receivers (used as scratch)
-	if tracker > receivers ||     // receivers should be unchanged or decreased (and also lower than math.MaxInt32)
-		uint32(state) != tracker+math.MaxInt32 || // lo still exactly math.MaxInt32 more than hi
-		!x.state.CompareAndSwap(state, 0) { // failing this indicates one or more unregistered receivers
+	finalReceivers := uint32(state >> 32)
+	lo := uint32(state & chanCasterLoMask)
+	if finalReceivers > receivers ||
+		(state&chanCasterSendingBit) == 0 ||
+		lo != finalReceivers ||
+		!x.state.CompareAndSwap(state, 0) {
 		panic(`bigbuff: chancaster: send: state invariant violation`)
 	}
 
-	// returns number of sends less any received by negative Add calls
-	return int(tracker)
+	return int(finalReceivers)
 }
 
 // Add increments or decrements the number of receivers, for [ChanCaster.C],
@@ -172,63 +200,100 @@ func (x *ChanCaster[C, V]) Send(value V) int {
 // receivers should independently decrement the number of receivers, if
 // necessary, as described above.
 func (x *ChanCaster[C, V]) Add(delta int) int {
-	const maxReceivers = math.MaxInt32
-
 	switch {
-	case delta >= 0:
-		var state uint64
-		if delta == 0 {
-			state = x.state.Load() // no change
-		} else if delta > maxReceivers {
-			panic(`bigbuff: chancaster: add: positive delta out of bounds`)
-		} else {
-			// increasing num receivers not allowed concurrently with sending
-			x.mutex.RLock()
-			defer x.mutex.RUnlock()
-
-			// add delta to both hi and lo
-			state = x.state.Add(uint64(delta)<<32 | uint64(uint32(delta)))
-		}
-
-		// validate to ensure we did not overflow + sanity check invariants
-		// note: if this was an add (and we acquired the lock), the lo value
-		// should never be the +maxReceivers case
-		if receivers, tracker := uint32(state>>32), uint32(state); receivers <= maxReceivers &&
-			receivers >= uint32(delta) &&
-			(receivers == tracker || (delta == 0 && receivers+maxReceivers == tracker)) {
+	case delta == 0:
+		state := x.state.Load()
+		receivers := uint32(state >> 32)
+		lo := uint32(state & chanCasterLoMask)
+		if receivers <= chanCasterMaxReceivers && receivers == lo {
 			return int(receivers)
 		}
 
-	case delta < -maxReceivers:
+	case delta > 0:
+		if delta > chanCasterMaxReceivers {
+			panic(`bigbuff: chancaster: add: positive delta out of bounds`)
+		}
+		uDelta := uint32(delta)
+		packedDelta := uint64(uDelta)<<32 | uint64(uDelta)
+
+		for {
+			state := x.state.Load()
+			receivers := uint32(state >> 32)
+			lo := uint32(state & chanCasterLoMask)
+			if receivers > chanCasterMaxReceivers || receivers != lo {
+				panic(`bigbuff: chancaster: add: state invariant violation`)
+			}
+
+			// Lock-free fast path: when no Send is active, increment both
+			// hi and lo in a single CAS without touching x.mutex.
+			if (state & chanCasterSendingBit) == 0 {
+				if chanCasterMaxReceivers-receivers < uDelta {
+					panic(`bigbuff: chancaster: add: state invariant violation`)
+				}
+				if x.state.CompareAndSwap(state, state+packedDelta) {
+					return int(receivers + uDelta)
+				}
+				continue
+			}
+
+			// Slow path: a Send batch is actively mid-flight. Synchronise on
+			// x.mutex to wait for the current Send batch to complete and clear
+			// chanCasterSendingBit.
+			x.mutex.Lock()
+			state = x.state.Load()
+			receivers = uint32(state >> 32)
+			lo = uint32(state & chanCasterLoMask)
+			if (state&chanCasterSendingBit) != 0 ||
+				receivers > chanCasterMaxReceivers ||
+				receivers != lo ||
+				chanCasterMaxReceivers-receivers < uDelta {
+				x.mutex.Unlock()
+				panic(`bigbuff: chancaster: add: state invariant violation`)
+			}
+			// While holding x.mutex, no Send can start; atomic Add is safe
+			// alongside concurrent lock-free positive or negative Adds.
+			state = x.state.Add(packedDelta)
+			x.mutex.Unlock()
+
+			receivers = uint32(state >> 32)
+			lo = uint32(state & chanCasterLoMask)
+			if (state&chanCasterSendingBit) == 0 &&
+				receivers <= chanCasterMaxReceivers &&
+				receivers >= uDelta &&
+				receivers == lo {
+				return int(receivers)
+			}
+			panic(`bigbuff: chancaster: add: state invariant violation`)
+		}
+
+	case delta < -chanCasterMaxReceivers:
 		panic(`bigbuff: chancaster: add: negative delta out of bounds`)
 
 	default:
-		// flip delta to positive, from negative
-		delta = -delta
+		uDelta := uint32(-delta)
+		packedSub := ^(uint64(uDelta)<<32 | uint64(uDelta) - 1)
 
-		// note: same delta calc as above, subtracted using two's complement rules
-		state := x.state.Add(^(uint64(delta)<<32 | uint64(uint32(delta)) - 1))
+		// Single atomic RMW subtracts uDelta from both hi and lo while
+		// preserving bit 31 (chanCasterSendingBit) unless lo underflows!
+		// Notice why: if lo < uDelta, subtracting uDelta from bits 0..30
+		// borrows from bit 31, flipping chanCasterSendingBit and causing
+		// lo != receivers — instantly catching underflow in a single instruction.
+		state := x.state.Add(packedSub)
+		receivers := uint32(state >> 32)
+		lo := uint32(state & chanCasterLoMask)
 
-		// validate, and, if necessary, receive any channel sends that would
-		// otherwise never be received (to avoid Send hanging)
-		if receivers := uint32(state >> 32); receivers <= maxReceivers &&
-			maxReceivers-receivers >= uint32(delta) {
-			switch uint32(state) { // lo
-			case receivers:
-				// not sending
-				return int(receivers) // note: already subtracted delta
-
-			case maxReceivers + receivers:
-				// sending - perform the requisite number of receives
-				// note: receivers = tracker-maxReceivers (per the above)
-				for range delta {
+		if receivers <= chanCasterMaxReceivers &&
+			chanCasterMaxReceivers-receivers >= uDelta &&
+			receivers == lo {
+			if (state & chanCasterSendingBit) != 0 {
+				// Send is mid-flight; drain our cancelled share of messages.
+				for range uDelta {
 					<-x.C
 				}
-				return int(receivers) // note: already subtracted delta
 			}
+			return int(receivers)
 		}
 	}
 
-	// invariant violation, e.g. due to OoB add, or previous violation
 	panic(`bigbuff: chancaster: add: state invariant violation`)
 }
