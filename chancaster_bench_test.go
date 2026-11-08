@@ -73,10 +73,6 @@ func BenchmarkChanCaster_highContention(b *testing.B) {
 	allStopped.Wait()
 }
 
-// BenchmarkChanCaster_AddCancel_Idle measures the common select-cancellation
-// path where a caller registers intent to receive via Add(1), another select
-// branch (e.g. context cancellation, timeout, or an already-ready channel)
-// wins before Send is called, and the caller unregisters via Add(-1).
 func BenchmarkChanCaster_AddCancel_Idle(b *testing.B) {
 	b.Run("Serial", func(b *testing.B) {
 		c := NewChanCaster(make(chan struct{}))
@@ -101,8 +97,6 @@ func BenchmarkChanCaster_AddCancel_Idle(b *testing.B) {
 	})
 }
 
-// BenchmarkChanCaster_Send_NoReceivers measures the fast-path cost of calling
-// Send when no receivers are registered.
 func BenchmarkChanCaster_Send_NoReceivers(b *testing.B) {
 	b.Run("Serial", func(b *testing.B) {
 		c := NewChanCaster(make(chan struct{}))
@@ -125,10 +119,6 @@ func BenchmarkChanCaster_Send_NoReceivers(b *testing.B) {
 	})
 }
 
-// BenchmarkChanCaster_Broadcast_QuiescentAdd measures full broadcast cycles
-// where each of N receivers calls Add(1) individually while Send is idle
-// (exercising the lock-free CAS fast path in the new implementation), followed
-// by Send broadcasting to all N receivers.
 func BenchmarkChanCaster_Broadcast_QuiescentAdd(b *testing.B) {
 	for _, numReceivers := range []int{1, 4, 16, 64} {
 		b.Run(fmt.Sprintf("receivers=%d", numReceivers), func(b *testing.B) {
@@ -165,8 +155,6 @@ func BenchmarkChanCaster_Broadcast_QuiescentAdd(b *testing.B) {
 			b.ResetTimer()
 
 			for i := range b.N {
-				// Release workers only after the previous Send has returned
-				// (guaranteeing chanCasterSendingBit == 0).
 				sendEpoch.Add(1)
 				target := uint64(i+1) * uint64(numReceivers)
 				for ready.Load() < target {
@@ -185,11 +173,6 @@ func BenchmarkChanCaster_Broadcast_QuiescentAdd(b *testing.B) {
 	}
 }
 
-// BenchmarkChanCaster_Broadcast_MidSendReAdd measures full broadcast cycles
-// where each of N receivers immediately re-registers via Add(1) upon receiving
-// from <-c.C. Because Send delivers to receivers sequentially on an unbuffered
-// channel, the first N-1 receivers call Add(1) while Send is still mid-flight
-// (chanCasterSendingBit == 1), exercising the mutex slow path.
 func BenchmarkChanCaster_Broadcast_MidSendReAdd(b *testing.B) {
 	for _, numReceivers := range []int{1, 4, 16, 64} {
 		b.Run(fmt.Sprintf("receivers=%d", numReceivers), func(b *testing.B) {
@@ -212,15 +195,12 @@ func BenchmarkChanCaster_Broadcast_MidSendReAdd(b *testing.B) {
 						if stopping.Load() {
 							return
 						}
-						// Re-register immediately while Send is still delivering
-						// to the remaining receivers in the current batch.
 						c.Add(1)
 						ready.Add(1)
 					}
 				}()
 			}
 
-			// Wait for initial registration before starting the timer.
 			for ready.Load() < uint64(numReceivers) {
 			}
 
@@ -238,7 +218,7 @@ func BenchmarkChanCaster_Broadcast_MidSendReAdd(b *testing.B) {
 
 			b.StopTimer()
 			stopping.Store(true)
-			c.Send(struct{}{}) // Drain the final N registrations cleanly.
+			c.Send(struct{}{})
 			wg.Wait()
 		})
 	}
