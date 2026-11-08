@@ -921,19 +921,19 @@ func TestChanPubSub_highContention(t *testing.T) {
 			expectedNext.CompareAndSwap(v, v+1)
 
 			if v < before {
-				die(prefix+`expected %d to be >= %d: %d`, v, before, getRecent())
+				die(`%sexpected %d to be >= %d: %d`, prefix, v, before, getRecent())
 			}
 			if v == 0 || (last != 0 && v != last+1) {
-				die(prefix+`expected %d to be %d: %d: ctx1Err=%t ctx2Err=%t`, v, last+1, getRecent(), pctx.Err() != nil, ctx.Err() != nil)
+				die(`%sexpected %d to be %d: %d: ctx1Err=%t ctx2Err=%t`, prefix, v, last+1, getRecent(), pctx.Err() != nil, ctx.Err() != nil)
 			}
 			last = v
 		}
 		//t.Logf(prefix+`received %d`, n)
 		if ctx.Err() == nil {
-			die(prefix + `expected context cancel to stop`)
+			die(`%sexpected context cancel to stop`, prefix)
 		}
 		if pctx.Err() == nil && ((last == 0 && d >= ratePerChunkRequireAtLeastOne) || (last != 0 && last < after)) {
-			die(prefix+`expected %d to be >= %d: %d (bound was %s)`, last, after, getRecent(), ratePerChunkRequireAtLeastOne)
+			die(`%sexpected %d to be >= %d: %d (bound was %s)`, prefix, last, after, getRecent(), ratePerChunkRequireAtLeastOne)
 		}
 		return
 	}
