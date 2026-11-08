@@ -105,31 +105,25 @@ func ExampleChanCaster_waitForNextFullCycle() {
 
 	// start waiter to send to a channel each cycle (that it detects - might drop some, if they start prior to re-registering)
 	fullCycleComplete := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		cycleWaiter(fullCycleComplete)
-	}()
+	})
 
 	// start some additional waiters (these don't do anything useful, just to demonstrate concurrency is ok)
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cycleWaiter(nil)
-		}()
+		})
 	}
 
 	// start the single sender (what is broadcasting the cycles)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for ctx.Err() == nil {
 			time.Sleep(time.Millisecond)
 			started.Send(struct{}{})
 			ended.Send(struct{}{})
 		}
-	}()
+	})
 
 	// wait for 10 full cycles, as handled by the first waiter
 	for i := range 10 {
@@ -184,13 +178,11 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 		b.Add(1)
 	}
 	fmt.Println(`state before send:`, stateStr())
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 3 {
 			fmt.Println(`received:`, <-b.C)
 		}
-	}()
+	})
 	send(1)
 	wg.Wait()
 	fmt.Println(`state after send:`, stateStr())
@@ -198,13 +190,11 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	// note: this does nothing
 	send(213)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 3 {
 			fmt.Println(`received:`, <-b.C)
 		}
-	}()
+	})
 	for range 3 {
 		b.Add(1)
 	}
@@ -219,14 +209,12 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 		b.Add(1)
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		fmt.Println(`received:`, <-b.C)
 		b.Add(-1)
 		fmt.Println(`state after canceling mid send:`, stateStr())
 		fmt.Println(`received:`, <-b.C)
-	}()
+	})
 
 	send(3)
 
@@ -582,21 +570,17 @@ func TestChanCaster_Add_success(t *testing.T) {
 	assertState(5, math.MaxInt32+5)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		assertAdd(-2, 3)
-		wg.Done()
-	}()
+	})
 	c.C <- 0
 	c.C <- 0
 	wg.Wait()
 	assertState(3, math.MaxInt32+3)
 
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		assertAdd(-3, 0)
-		wg.Done()
-	}()
+	})
 	c.C <- 0
 	c.C <- 0
 	c.C <- 0
@@ -609,20 +593,16 @@ func TestChanCaster_Add_success(t *testing.T) {
 	assertAdd(0, math.MaxInt32)
 	assertState(math.MaxInt32, math.MaxInt32*2)
 
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		assertAdd(-1, math.MaxInt32-1)
-		wg.Done()
-	}()
+	})
 	c.C <- 0
 	wg.Wait()
 	assertState(math.MaxInt32-1, math.MaxInt32*2-1)
 
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		assertAdd(-299, math.MaxInt32-300)
-		wg.Done()
-	}()
+	})
 	for range 299 {
 		c.C <- 0
 	}
@@ -709,9 +689,7 @@ func FuzzChanCaster_Add(f *testing.F) {
 			var count int
 			stop := make(chan struct{})
 			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for {
 					select {
 					case <-stop:
@@ -720,7 +698,7 @@ func FuzzChanCaster_Add(f *testing.F) {
 						count--
 					}
 				}
-			}()
+			})
 			defer func() {
 				close(stop)
 				wg.Wait()
@@ -832,9 +810,7 @@ func FuzzChanCaster_Send(f *testing.F) {
 		if !validState || uint32(dec) == hi || hi == 0 {
 			ready.Done()
 		} else {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				var readied bool
 				n := expected
 				if !validDec {
@@ -865,7 +841,7 @@ func FuzzChanCaster_Send(f *testing.F) {
 						}
 					}
 				}
-			}()
+			})
 		}
 
 		if validState && hi != 0 {
@@ -875,9 +851,7 @@ func FuzzChanCaster_Send(f *testing.F) {
 			}
 
 			for range n {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					ready.Wait()
 
 					var success bool
@@ -904,7 +878,7 @@ func FuzzChanCaster_Send(f *testing.F) {
 						t.Errorf(`expected ~%d, got %d`, hi-uint32(dec), v)
 					}
 					success = true
-				}()
+				})
 			}
 		}
 
@@ -1119,13 +1093,11 @@ func TestChanCaster_newChanCaster_valid(t *testing.T) {
 	c.Add(1)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if v := <-c.C; v != 42 {
 			t.Errorf("expected 42, got %d", v)
 		}
-	}()
+	})
 
 	if n := c.Send(42); n != 1 {
 		t.Errorf("expected 1 send, got %d", n)
@@ -1147,13 +1119,11 @@ func TestChanCaster_newChanCaster_namedChannelType(t *testing.T) {
 	c.Add(1)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if v := <-c.C; v != 99 {
 			t.Errorf("expected 99, got %d", v)
 		}
-	}()
+	})
 
 	if n := c.Send(99); n != 1 {
 		t.Errorf("expected 1 send, got %d", n)

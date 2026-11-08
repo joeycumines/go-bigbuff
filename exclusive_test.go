@@ -364,7 +364,7 @@ func TestExclusive_Call_concurrent(t *testing.T) {
 	const N = 100
 	var (
 		e           Exclusive
-		workCalls   int32
+		workCalls   atomic.Int32
 		releaseWork = make(chan struct{})
 		started     = make(chan struct{}, 1)
 		wg          sync.WaitGroup
@@ -385,7 +385,7 @@ func TestExclusive_Call_concurrent(t *testing.T) {
 				<-gate2
 			}
 			v, err := e.Call(42, func() (any, error) {
-				atomic.AddInt32(&workCalls, 1)
+				workCalls.Add(1)
 				select {
 				case started <- struct{}{}:
 				default:
@@ -436,7 +436,7 @@ func TestExclusive_Call_concurrent(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("barrier timed out: expected %d joiners on nextItem, workCalls=%d", N-1, atomic.LoadInt32(&workCalls))
+			t.Fatalf("barrier timed out: expected %d joiners on nextItem, workCalls=%d", N-1, workCalls.Load())
 		}
 		runtime.Gosched()
 	}
@@ -449,7 +449,7 @@ func TestExclusive_Call_concurrent(t *testing.T) {
 	// that arrive during work join nextItem. After work 1 completes, exactly
 	// one more call starts work 2 (instant), and the remaining N-2 calls
 	// share work 2's result. Total: 2 work executions for 100 calls.
-	if workCalls := atomic.LoadInt32(&workCalls); workCalls != 2 {
+	if workCalls := workCalls.Load(); workCalls != 2 {
 		t.Errorf("expected exactly 2 work calls (N=%d debounced via Exclusive.Call), got %d", N, workCalls)
 	}
 
@@ -517,7 +517,7 @@ func TestExclusive_CallAfter(t *testing.T) {
 	const N = 100
 	var (
 		e           Exclusive
-		workCalls   int32
+		workCalls   atomic.Int32
 		releaseWork = make(chan struct{})
 		started     = make(chan struct{}, 1)
 		wg          sync.WaitGroup
@@ -531,7 +531,7 @@ func TestExclusive_CallAfter(t *testing.T) {
 			defer wg.Done()
 			<-gate
 			v, err := e.CallAfter(42, func() (any, error) {
-				atomic.AddInt32(&workCalls, 1)
+				workCalls.Add(1)
 				select {
 				case started <- struct{}{}:
 				default:
@@ -575,7 +575,7 @@ func TestExclusive_CallAfter(t *testing.T) {
 	close(releaseWork)
 	wg.Wait()
 
-	if workCalls := atomic.LoadInt32(&workCalls); workCalls != 1 {
+	if workCalls := workCalls.Load(); workCalls != 1 {
 		t.Errorf("expected exactly 1 work call (N=%d calls batched via 1s wait), got %d", N, workCalls)
 	}
 
@@ -905,15 +905,15 @@ func TestExclusive_CallWithOptions_startInitialCase(t *testing.T) {
 
 	var (
 		x     Exclusive
-		calls int32
+		calls atomic.Int32
 	)
-	if v := x.CallWithOptions(ExclusiveStart(true), ExclusiveWork(func(resolve func(result any, err error)) { atomic.AddInt32(&calls, 1) })); v != nil {
+	if v := x.CallWithOptions(ExclusiveStart(true), ExclusiveWork(func(resolve func(result any, err error)) { calls.Add(1) })); v != nil {
 		t.Error()
 	}
-	for i := time.Duration(0); i < 1000 && atomic.LoadInt32(&calls) == 0; i++ {
+	for i := time.Duration(0); i < 1000 && calls.Load() == 0; i++ {
 		time.Sleep(time.Millisecond)
 	}
-	if v := atomic.LoadInt32(&calls); v != 1 {
+	if v := calls.Load(); v != 1 {
 		t.Error(v)
 	}
 }
@@ -937,8 +937,8 @@ func TestExclusiveRateLimit(t *testing.T) {
 	)
 	var (
 		x       Exclusive
-		called  int64
-		shorter int64
+		called  atomic.Int64
+		shorter atomic.Int64
 		wg      sync.WaitGroup
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
@@ -951,10 +951,10 @@ func TestExclusiveRateLimit(t *testing.T) {
 				ts := time.Now()
 				v := <-x.CallWithOptions(
 					ExclusiveRateLimit(ctx, min),
-					ExclusiveWork(func(resolve func(result any, err error)) { resolve(atomic.AddInt64(&called, 1), nil) }),
+					ExclusiveWork(func(resolve func(result any, err error)) { resolve(called.Add(1), nil) }),
 				)
 				if d := time.Since(ts); d <= min/2 {
-					atomic.AddInt64(&shorter, 1)
+					shorter.Add(1)
 				}
 				if v.Error != nil {
 					if v.Error != context.DeadlineExceeded {
@@ -977,10 +977,10 @@ func TestExclusiveRateLimit(t *testing.T) {
 	if d := time.Since(ts); d > time.Millisecond*10 {
 		t.Error(d)
 	}
-	if v := atomic.LoadInt64(&shorter); v <= num/2 {
+	if v := shorter.Load(); v <= num/2 {
 		t.Error(v)
 	}
-	if v := math.Round(math.Abs(float64(atomic.LoadInt64(&called)) - float64(wait)/float64(min))); v > 1 {
+	if v := math.Round(math.Abs(float64(called.Load()) - float64(wait)/float64(min))); v > 1 {
 		t.Error(v)
 	}
 	//t.Log(atomic.LoadInt64(&called), atomic.LoadInt64(&shorter))

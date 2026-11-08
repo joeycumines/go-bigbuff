@@ -137,8 +137,7 @@ func TestConflatedContext_usesFirstContextValues(t *testing.T) {
 	baseCtx := context.WithValue(context.Background(), testKey, "foo")
 
 	// Additional contexts:
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
+	ctx2 := t.Context()
 
 	// Create a conflated context.
 	conCtx, conCancel := ConflatedContext(baseCtx, ctx2)
@@ -153,11 +152,9 @@ func TestConflatedContext_usesFirstContextValues(t *testing.T) {
 func TestConflatedContext_explicitCancel(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
+	ctx1 := t.Context()
 
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
+	ctx2 := t.Context()
 
 	conCtx, conCancel := ConflatedContext(ctx1, ctx2)
 	defer conCancel()
@@ -229,8 +226,7 @@ func TestChainAfterFunc_callsFuncOnCtxCancel(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	other, otherCancel := context.WithCancel(context.Background())
-	defer otherCancel()
+	other := t.Context()
 
 	called := make(chan struct{})
 	f := func() { close(called) }
@@ -253,12 +249,12 @@ func TestChainAfterFunc_doesNotCallFuncIfAlreadyCalled(t *testing.T) {
 	defer cancel()
 
 	var (
-		callCount int32
+		callCount atomic.Int32
 		once      sync.Once
 		done      = make(chan struct{})
 	)
 	f := func() {
-		atomic.AddInt32(&callCount, 1)
+		callCount.Add(1)
 		once.Do(func() {
 			close(done)
 		})
@@ -276,7 +272,7 @@ func TestChainAfterFunc_doesNotCallFuncIfAlreadyCalled(t *testing.T) {
 	case <-done:
 	}
 
-	if v := atomic.LoadInt32(&callCount); v != 1 {
+	if v := callCount.Load(); v != 1 {
 		t.Errorf("expected f to be called once, but was called %d times", v)
 	}
 }
@@ -291,12 +287,12 @@ func TestChainAfterFunc_otherAlreadyCanceled(t *testing.T) {
 	defer otherCancel()
 
 	var (
-		callCount int32
+		callCount atomic.Int32
 		once      sync.Once
 		done      = make(chan struct{})
 	)
 	f := func() {
-		atomic.AddInt32(&callCount, 1)
+		callCount.Add(1)
 		once.Do(func() {
 			close(done)
 		})
@@ -316,7 +312,7 @@ func TestChainAfterFunc_otherAlreadyCanceled(t *testing.T) {
 
 	time.Sleep(time.Millisecond * 30)
 
-	if v := atomic.LoadInt32(&callCount); v != 1 {
+	if v := callCount.Load(); v != 1 {
 		t.Errorf("expected f to be called once, but was called %d times", v)
 	}
 }

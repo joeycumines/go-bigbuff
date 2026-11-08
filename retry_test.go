@@ -57,8 +57,7 @@ func TestExponentialRetry_success(t *testing.T) {
 		Duration time.Duration
 	}
 
-	eCtx, eCancel := context.WithCancel(context.Background())
-	defer eCancel()
+	eCtx := t.Context()
 	rate := time.Second
 
 	var (

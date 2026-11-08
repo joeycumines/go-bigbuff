@@ -179,15 +179,15 @@ func TestCallArgs_funcResults(t *testing.T) {
 func TestCallable_Call_noArgs(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	var count uint32
+	var count atomic.Uint32
 	MustCall(NewCallable(func(values ...fmt.Stringer) error {
 		if len(values) != 0 {
 			t.Error(values)
 		}
-		atomic.AddUint32(&count, 1)
+		count.Add(1)
 		return nil
 	}))
-	if v := atomic.LoadUint32(&count); v != 1 {
+	if v := count.Load(); v != 1 {
 		t.Error(v)
 	}
 }
@@ -195,18 +195,18 @@ func TestCallable_Call_noArgs(t *testing.T) {
 func TestCallable_Call_noArgsButNonNilCallArgs(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	var count uint32
+	var count atomic.Uint32
 	MustCall(
 		NewCallable(func(values ...fmt.Stringer) error {
 			if len(values) != 0 {
 				t.Error(values)
 			}
-			atomic.AddUint32(&count, 1)
+			count.Add(1)
 			return nil
 		}),
 		CallArgs(),
 	)
-	if v := atomic.LoadUint32(&count); v != 1 {
+	if v := count.Load(); v != 1 {
 		t.Error(v)
 	}
 }
@@ -214,24 +214,24 @@ func TestCallable_Call_noArgsButNonNilCallArgs(t *testing.T) {
 func TestCallable_Call_noArgsButNonNilCallArgsRaw(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
-	var count uint32
+	var count atomic.Uint32
 	MustCall(
 		NewCallable(func(values ...fmt.Stringer) error {
 			if len(values) != 0 {
 				t.Error(values)
 			}
-			if v := atomic.AddUint32(&count, 1); v != 2 {
+			if v := count.Add(1); v != 2 {
 				t.Error(v)
 			}
 			return nil
 		}),
 		CallArgsRaw(func() {
-			if v := atomic.AddUint32(&count, 1); v != 1 {
+			if v := count.Add(1); v != 1 {
 				t.Error(v)
 			}
 		}),
 	)
-	if v := atomic.LoadUint32(&count); v != 2 {
+	if v := count.Load(); v != 2 {
 		t.Error(v)
 	}
 }
@@ -275,19 +275,19 @@ func TestCall_noOptions(t *testing.T) {
 	t.Cleanup(checkNumGoroutines(t))
 
 	var (
-		count uint32
-		fn    = NewCallable(func() { atomic.AddUint32(&count, 1) })
+		count atomic.Uint32
+		fn    = NewCallable(func() { count.Add(1) })
 	)
 	MustCall(fn)
-	if v := atomic.LoadUint32(&count); v != 1 {
+	if v := count.Load(); v != 1 {
 		t.Fatal(v)
 	}
 	MustCall(fn)
-	if v := atomic.LoadUint32(&count); v != 2 {
+	if v := count.Load(); v != 2 {
 		t.Fatal(v)
 	}
 	MustCall(fn)
-	if v := atomic.LoadUint32(&count); v != 3 {
+	if v := count.Load(); v != 3 {
 		t.Fatal(v)
 	}
 }

@@ -50,7 +50,7 @@ func TestWorker_Do(t *testing.T) {
 
 	var (
 		w     = new(Worker)
-		count int32
+		count atomic.Int32
 		in    = make(chan []int)
 		out   = make(chan int)
 		sum   = func(v ...int) int {
@@ -58,7 +58,7 @@ func TestWorker_Do(t *testing.T) {
 				if done == nil {
 					t.Fatal(`nil done`)
 				}
-				if v := atomic.AddInt32(&count, 1); v != 1 {
+				if v := count.Add(1); v != 1 {
 					t.Fatal(v)
 				}
 				for {
@@ -74,7 +74,7 @@ func TestWorker_Do(t *testing.T) {
 					}
 					break
 				}
-				if v := atomic.AddInt32(&count, -1); v != 0 {
+				if v := count.Add(-1); v != 0 {
 					t.Fatal(v)
 				}
 			})()
@@ -115,13 +115,11 @@ func TestWorker_Do(t *testing.T) {
 				{[]int{0, 0, 4, 1}, 5},
 				{[]int{}, 0},
 			} {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					if v := sum(tc.In...); v != tc.Out {
 						t.Error(i, v)
 					}
-				}()
+				})
 			}
 			wg.Wait()
 		}

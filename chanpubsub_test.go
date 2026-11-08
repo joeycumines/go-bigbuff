@@ -109,7 +109,7 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 	var allStopped sync.WaitGroup
 	allStopped.Add(numReceivers)
 
-	var count int32
+	var count atomic.Int32
 
 	for range numReceivers {
 		go func() {
@@ -120,7 +120,7 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 					return
 				case <-c.C():
 				}
-				atomic.AddInt32(&count, 1)
+				count.Add(1)
 				c.Wait()
 			}
 		}()
@@ -128,15 +128,15 @@ func BenchmarkChanPubSub_highContention(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if v := atomic.LoadInt32(&count); v != 0 {
+		if v := count.Load(); v != 0 {
 			b.Fatalf(`expected 0, got %d`, v)
 		}
 		bmrInt = c.Send(struct{}{})
 		if bmrInt != numReceivers {
 			b.Fatalf(`expected %d, got %d`, numReceivers, bmrInt)
 		}
-		if !atomic.CompareAndSwapInt32(&count, numReceivers, 0) {
-			b.Fatalf(`expected %d, got %d`, numReceivers, atomic.LoadInt32(&count))
+		if !count.CompareAndSwap(numReceivers, 0) {
+			b.Fatalf(`expected %d, got %d`, numReceivers, count.Load())
 		}
 	}
 	b.StopTimer()
@@ -160,14 +160,14 @@ func BenchmarkChanPubSub_SubscribeContext_highContention(b *testing.B) {
 	var allStopped sync.WaitGroup
 	allStopped.Add(numReceivers)
 
-	var count int32
+	var count atomic.Int32
 
 	for range numReceivers {
 		iter := c.SubscribeContext(ctx)
 		go func() {
 			defer allStopped.Done()
 			for range iter {
-				atomic.AddInt32(&count, 1)
+				count.Add(1)
 			}
 		}()
 	}
@@ -183,7 +183,7 @@ func BenchmarkChanPubSub_SubscribeContext_highContention(b *testing.B) {
 	allStopped.Wait()
 	b.StopTimer()
 
-	if v := int(atomic.LoadInt32(&count)); v != b.N*numReceivers {
+	if v := int(count.Load()); v != b.N*numReceivers {
 		b.Errorf(`expected %d, got %d`, b.N*numReceivers, v)
 	}
 }
@@ -208,9 +208,7 @@ func TestChanPubSub_basicSendReceive(t *testing.T) {
 
 	// We send values in a goroutine
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range 5 {
 			sent := c.Send(i)
 			if sent != 1 {
@@ -219,7 +217,7 @@ func TestChanPubSub_basicSendReceive(t *testing.T) {
 		}
 		// Closing the underlying channel to signal iteration is done
 		close(c.C())
-	}()
+	})
 
 	// We'll collect results
 	var received []int
@@ -287,9 +285,7 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 	}
 
 	// Send some values in a goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range totalSends {
 			sent := c.Send(i)
 			if sent != numSubscribers {
@@ -298,7 +294,7 @@ func TestChanPubSub_multipleSubscribers(t *testing.T) {
 		}
 		// Close so that iteration finishes
 		close(c.C())
-	}()
+	})
 
 	wg.Wait()
 
@@ -330,18 +326,14 @@ func TestChanPubSub_unsubscribeEarly(t *testing.T) {
 	sub2Ctx, cancel := context.WithCancel(context.Background())
 	sub2 := c.SubscribeContext(sub2Ctx)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		sub1(func(v int) bool {
 			subscriber1Received++
 			return true
 		})
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		sub2(func(v int) bool {
 			subscriber2Received++
 			// We'll stop receiving after the 3rd item
@@ -350,7 +342,7 @@ func TestChanPubSub_unsubscribeEarly(t *testing.T) {
 			}
 			return true
 		})
-	}()
+	})
 
 	// Send 5 items
 	for i := range 5 {
@@ -399,15 +391,12 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 	var totalReceived, totalSent int64
 	var mu sync.Mutex
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Start some subscribers that randomly unsubscribe
 	for range totalGoroutines {
 		seq := c.SubscribeContext(ctx)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			count := 0
 			seq(func(v int) bool {
 				mu.Lock()
@@ -424,14 +413,12 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 				}
 				return true
 			})
-		}()
+		})
 	}
 
 	// Start some senders
 	for range totalGoroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := range sendsPerGoroutine {
 				c.Send(j)
 				time.Sleep(time.Millisecond * 1)
@@ -439,7 +426,7 @@ func TestChanPubSub_concurrentSubscribeUnsubscribe(t *testing.T) {
 				totalSent++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Done()
@@ -1052,9 +1039,7 @@ func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
 	senderDone := make(chan struct{})
 
 	for range numWorkersSpammingSubscribeUnsubscribe {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-senderDone:
@@ -1068,7 +1053,7 @@ func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
 				c.Add(-1)
 				time.Sleep(time.Duration(float64(time.Microsecond) * rand.Float64()))
 			}
-		}()
+		})
 	}
 
 	// Track how many messages were actually sent to at least numWorkersReceiving
@@ -1076,9 +1061,7 @@ func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
 
 	for range numWorkersReceiving {
 		iter := c.SubscribeContext(ctx)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var i int
 			defer func() {
 				// Should have received exactly as many as were sent
@@ -1094,7 +1077,7 @@ func TestChanPubSub_withSpammingSubscribeUnsubscribe(t *testing.T) {
 				}
 				i++
 			}
-		}()
+		})
 	}
 
 	for i := range valuesToSend {
@@ -1147,8 +1130,7 @@ func TestChanPubSub_SubscribeContext_nilYield(t *testing.T) {
 	checkGoroutinesBackToBaseline()
 	// WARNING: need cancelable context to trigger the background goroutine
 	// (if ctx.Done returns nil, it will skip spawning the goroutine)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	// it is really quite difficult to trigger the background goroutine...
 	ctx = &valuelessContext{Context: ctx}
 	iter := c.SubscribeContext(ctx)
@@ -1210,8 +1192,7 @@ func TestChanPubSub_SubscribeContext_stopsContextOnCallingIterator(t *testing.T)
 	checkGoroutinesBackToBaseline()
 	// WARNING: need cancelable context to trigger the background goroutine
 	// (if ctx.Done returns nil, it will skip spawning the goroutine)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	// it is really quite difficult to trigger the background goroutine...
 	ctx = &valuelessContext{Context: ctx}
 	iter := c.SubscribeContext(ctx)
