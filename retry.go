@@ -88,10 +88,13 @@ var waitDuration = func(ctx context.Context, d time.Duration) {
 	}
 }
 
-var calcExponentialRetry = func(d time.Duration, c uint32) time.Duration {
-	if c > maxShiftUint32 {
-		c = maxShiftUint32
+var (
+	calcExponentialRetry = func(d time.Duration, c uint32) time.Duration {
+		if c > maxShiftUint32 {
+			c = maxShiftUint32
+		}
+		c = 1 << c
+		return time.Duration(randInt63n(int64(c))) * d
 	}
-	c = 1 << c
-	return time.Duration(rand.Int63n(int64(c))) * d
-}
+	randInt63n = rand.Int63n
+)

@@ -395,9 +395,12 @@ func TestCalcExponentialRetry(t *testing.T) {
 			Retry: time.Second * 134020434,
 		},
 	}
+	oldRandInt63n := randInt63n
+	defer func() { randInt63n = oldRandInt63n }()
 	for i, testCase := range testCases {
 		name := fmt.Sprintf("TestCalcExponentialRetry_#%d", i+1)
-		rand.Seed(testCase.Seed)
+		r := rand.New(rand.NewSource(testCase.Seed))
+		randInt63n = r.Int63n
 		retry := calcExponentialRetry(testCase.Rate, testCase.Count)
 		if retry != testCase.Retry {
 			t.Error(name, retry, int64(retry/testCase.Rate), testCase.Retry, int64(testCase.Retry/testCase.Rate))

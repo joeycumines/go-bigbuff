@@ -565,7 +565,8 @@ func TestConsumer_Get_leaky(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer consumer.Close()
-	ctx := t.Context()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	go func() {
 		ticker := time.NewTicker(time.Millisecond)
 		defer ticker.Stop()
