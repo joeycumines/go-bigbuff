@@ -253,26 +253,6 @@ func ExampleChanCaster_decrementReceiversDuringSend() {
 	//final num receivers: receivers: 0, remaining: -2147483647, state: 00000000000000000000000000000000|00000000000000000000000000000000
 }
 
-var dontElideMe any
-
-func BenchmarkChanCaster_Send_waitForNextFullCycle(b *testing.B) {
-	b.ReportAllocs()
-
-	startedCount, endedCount, cycleCount := testChanCasterSendWaitForNextFullCycle(1_000, func(started, ended *ChanCaster[chan struct{}, struct{}]) {
-		b.ResetTimer()
-
-		for range b.N {
-			started.Send(struct{}{})
-			ended.Send(struct{}{})
-		}
-
-		b.StopTimer()
-	})
-
-	dontElideMe = fmt.Sprintf(`startedCount=%d, endedCount=%d, cycleCount=%d`, startedCount, endedCount, cycleCount)
-	b.Log(dontElideMe)
-}
-
 // TestChanCaster_Send_waitForNextFullCycle_stress is a high-contention stress
 // test that verifies no deadlocks, panics, or lost values under load. It uses
 // intentionally lenient bounds because the exact cycle count depends on
@@ -1183,48 +1163,4 @@ func TestChanCaster_newChanCaster_namedChannelType(t *testing.T) {
 	if c.state.Load() != 0 {
 		t.Error("expected state to be 0")
 	}
-}
-
-var bmrInt int
-
-func BenchmarkChanCaster_highContention(b *testing.B) {
-	const numReceivers = 100_000
-
-	c := NewChanCaster(make(chan struct{}))
-
-	stop := make(chan struct{})
-
-	var allStopped sync.WaitGroup
-	allStopped.Add(numReceivers)
-
-	var ready sync.WaitGroup
-
-	for range numReceivers {
-		go func() {
-			defer allStopped.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				case <-c.C:
-				}
-				ready.Done()
-			}
-		}()
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		c.Add(numReceivers)
-		ready.Add(numReceivers)
-		bmrInt = c.Send(struct{}{})
-		if bmrInt != numReceivers {
-			b.Fatalf(`expected %d, got %d`, numReceivers, bmrInt)
-		}
-		ready.Wait()
-	}
-	b.StopTimer()
-
-	close(stop)
-	allStopped.Wait()
 }
